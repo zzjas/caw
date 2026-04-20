@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "caw"
+name = "coding-agent-wrapper"
 version = "0.1.0"
-description = ""
+description = "Unified Python library and CLI for orchestrating coding agents (Claude Code, Codex, etc.) with MCP tool servers and credential management."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -38,6 +38,12 @@ Repository = "https://github.com/zzjas/caw"
 
 [project.scripts]
 caw = "caw.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["caw"]
+
+[tool.hatch.build.targets.sdist]
+include = ["caw", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 120

@@ -5,6 +5,18 @@
 ## Install
 
 ```bash
+pip install coding-agent-wrapper
+```
+
+Import `caw`:
+
+```python
+import caw
+```
+
+For local development:
+
+```bash
 pip install -e .
 ```
 
