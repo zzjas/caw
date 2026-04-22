@@ -38,6 +38,7 @@ Repository = "https://github.com/zzjas/caw"
 
 [project.scripts]
 caw = "caw.cli:main"
+caw-traj = "caw.traj_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["caw"]
