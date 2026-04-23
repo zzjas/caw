@@ -15,7 +15,7 @@ def main():
     print("\n=== Auth file status ===")
     statuses = get_status(auth_dir=auth_dir)
     for s in statuses:
-        print(f"  {s.agent}/{s.file}: type={s.type}, exists={s.exists}, symlink={s.symlink_state}")
+        print(f"  {s.agent}/{s.file}: type={s.type}, strategy={s.strategy}, exists={s.exists}")
         if s.token_expiry:
             print(f"    token: {s.token_expiry}")
 

@@ -82,10 +82,8 @@ class TestSetupCustomDir:
 
         # Monkeypatch AUTH_DIR so we don't touch the real filesystem
         import caw.auth.collector as collector_mod
-        import caw.auth.linker as linker_mod
 
         monkeypatch.setattr(collector_mod, "AUTH_DIR", caw_auth)
-        monkeypatch.setattr(linker_mod, "AUTH_DIR", caw_auth)
 
         result = setup(agents=["claude"], source_home=str(home))
         assert result == caw_auth

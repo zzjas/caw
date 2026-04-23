@@ -16,7 +16,7 @@ class ManifestFile:
     container_target: str  # relative to $HOME in container, e.g. ".claude/.credentials.json"
     host_original: str  # relative to $HOME on host, e.g. ".claude/.credentials.json"
     type: str  # "credential" or "config"
-    strategy: str  # "symlink" or "copy"
+    strategy: str  # "bind" (bind-mounted from host, copy+guard in container) or "copy"
     mode: str  # e.g. "0600"
 
 

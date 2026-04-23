@@ -131,7 +131,7 @@ class ClaudeAuthProvider(AgentAuthProvider):
                 container_target=".claude/.credentials.json",
                 host_original=".claude/.credentials.json",
                 type="credential",
-                strategy="symlink",
+                strategy="bind",
                 mode="0600",
             ),
             content=json.dumps(credentials).encode(),
@@ -229,7 +229,7 @@ class CodexAuthProvider(AgentAuthProvider):
                     container_target=".codex/auth.json",
                     host_original=".codex/auth.json",
                     type="credential",
-                    strategy="symlink",
+                    strategy="bind",
                     mode="0600",
                 ),
                 content=auth_content,
@@ -260,165 +260,6 @@ class CodexAuthProvider(AgentAuthProvider):
 
 
 # ---------------------------------------------------------------------------
-# Gemini
-# ---------------------------------------------------------------------------
-
-
-class GeminiAuthProvider(AgentAuthProvider):
-    name = "gemini"
-
-    _CREDENTIAL_FILES = ["oauth_creds.json"]
-    _CONFIG_FILES = ["google_accounts.json", "settings.json", "installation_id"]
-
-    def validate(self, src_home: Path) -> list[str]:
-        creds = src_home / ".gemini" / "oauth_creds.json"
-        if not creds.exists():
-            return [str(creds)]
-        return []
-
-    def describe(self, src_home: Path) -> str:
-        try:
-            accounts_path = src_home / ".gemini" / "google_accounts.json"
-            if accounts_path.exists():
-                with open(accounts_path) as f:
-                    accounts = json.load(f)
-                if isinstance(accounts, list) and accounts:
-                    email = accounts[0].get("email", "unknown")
-                    return f"Account: {email}"
-            return "Credentials present"
-        except Exception:
-            return "Could not read account info"
-
-    def collect(self, src_home: Path) -> list[CollectedFile]:
-        files: list[CollectedFile] = []
-        gemini_dir = src_home / ".gemini"
-
-        # Credential files — symlinked
-        for filename in self._CREDENTIAL_FILES:
-            path = gemini_dir / filename
-            if path.exists():
-                files.append(
-                    CollectedFile(
-                        manifest_file=ManifestFile(
-                            src=f"gemini/{filename}",
-                            container_target=f".gemini/{filename}",
-                            host_original=f".gemini/{filename}",
-                            type="credential",
-                            strategy="symlink",
-                            mode="0600",
-                        ),
-                        content=path.read_bytes(),
-                    )
-                )
-
-        # Config files — copied
-        for filename in self._CONFIG_FILES:
-            path = gemini_dir / filename
-            if path.exists():
-                files.append(
-                    CollectedFile(
-                        manifest_file=ManifestFile(
-                            src=f"gemini/{filename}",
-                            container_target=f".gemini/{filename}",
-                            host_original=f".gemini/{filename}",
-                            type="config",
-                            strategy="copy",
-                            mode="0600",
-                        ),
-                        content=path.read_bytes(),
-                    )
-                )
-
-        found = [f.manifest_file.src.split("/")[-1] for f in files]
-        console.print(f"  [dim]Collected {len(found)} files: {', '.join(found)}[/dim]")
-        return files
-
-
-# ---------------------------------------------------------------------------
-# Cursor
-# ---------------------------------------------------------------------------
-
-CURSOR_CLI_CONFIG_KEEP_KEYS = {
-    "authInfo",
-    "permissions",
-    "model",
-    "approvalMode",
-    "sandbox",
-}
-
-
-class CursorAuthProvider(AgentAuthProvider):
-    name = "cursor"
-
-    def validate(self, src_home: Path) -> list[str]:
-        missing = []
-        auth_json = src_home / ".config" / "cursor" / "auth.json"
-        cli_config = src_home / ".cursor" / "cli-config.json"
-        if not auth_json.exists() and not cli_config.exists():
-            missing.append(str(auth_json))
-            missing.append(str(cli_config))
-        return missing
-
-    def describe(self, src_home: Path) -> str:
-        try:
-            auth_path = src_home / ".config" / "cursor" / "auth.json"
-            if auth_path.exists():
-                with open(auth_path) as f:
-                    auth_data = json.load(f)
-                email = auth_data.get("email", auth_data.get("user", "unknown"))
-                return f"Account: {email}"
-            return "Credentials present"
-        except Exception:
-            return "Could not read account info"
-
-    def collect(self, src_home: Path) -> list[CollectedFile]:
-        files: list[CollectedFile] = []
-
-        # .config/cursor/auth.json — credential, symlinked
-        auth_path = src_home / ".config" / "cursor" / "auth.json"
-        if auth_path.exists():
-            files.append(
-                CollectedFile(
-                    manifest_file=ManifestFile(
-                        src="cursor/auth.json",
-                        container_target=".config/cursor/auth.json",
-                        host_original=".config/cursor/auth.json",
-                        type="credential",
-                        strategy="symlink",
-                        mode="0600",
-                    ),
-                    content=auth_path.read_bytes(),
-                )
-            )
-
-        # .cursor/cli-config.json — config, copied (cleaned)
-        cli_config_path = src_home / ".cursor" / "cli-config.json"
-        if cli_config_path.exists():
-            with open(cli_config_path) as f:
-                full_config = json.load(f)
-            clean = {k: full_config[k] for k in CURSOR_CLI_CONFIG_KEEP_KEYS if k in full_config}
-            stripped = len(full_config) - len(clean)
-            console.print(f"  [dim]Stripped cli-config.json: removed {stripped} keys, kept {len(clean)}[/dim]")
-            files.append(
-                CollectedFile(
-                    manifest_file=ManifestFile(
-                        src="cursor/cli-config.json",
-                        container_target=".cursor/cli-config.json",
-                        host_original=".cursor/cli-config.json",
-                        type="config",
-                        strategy="copy",
-                        mode="0600",
-                    ),
-                    content=json.dumps(clean, indent=2).encode(),
-                )
-            )
-
-        found = [f.manifest_file.src for f in files]
-        console.print(f"  [dim]Files: {', '.join(found)}[/dim]")
-        return files
-
-
-# ---------------------------------------------------------------------------
 # Provider registry
 # ---------------------------------------------------------------------------
 
@@ -427,7 +268,5 @@ PROVIDERS: dict[str, AgentAuthProvider] = {
     for p in [
         ClaudeAuthProvider(),
         CodexAuthProvider(),
-        GeminiAuthProvider(),
-        CursorAuthProvider(),
     ]
 }
