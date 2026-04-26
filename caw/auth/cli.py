@@ -47,17 +47,19 @@ def teardown(
     to override — but you will have to re-authenticate every agent.
     """
     from . import TeardownWouldOrphanSymlinksError, teardown as do_teardown
-    from .collector import AUTH_DIR
+    from .collector import default_auth_dir
+
+    auth_dir = default_auth_dir()
 
     if dry_run:
-        if AUTH_DIR.exists():
-            typer.echo(f"Would remove: {AUTH_DIR}")
+        if auth_dir.exists():
+            typer.echo(f"Would remove: {auth_dir}")
         else:
-            typer.echo(f"Nothing to remove: {AUTH_DIR} does not exist.")
+            typer.echo(f"Nothing to remove: {auth_dir} does not exist.")
         return
 
-    if not AUTH_DIR.exists():
-        typer.echo(f"Nothing to remove: {AUTH_DIR} does not exist.")
+    if not auth_dir.exists():
+        typer.echo(f"Nothing to remove: {auth_dir} does not exist.")
         return
 
     try:
@@ -65,7 +67,7 @@ def teardown(
     except TeardownWouldOrphanSymlinksError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
-    typer.echo(f"Removed {AUTH_DIR}.")
+    typer.echo(f"Removed {auth_dir}.")
 
 
 @app.command("status")

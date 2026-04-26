@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 
@@ -12,8 +13,27 @@ from .providers import PROVIDERS, AgentAuthProvider, CollectedFile
 
 console = Console()
 
-# Canonical auth directory
-AUTH_DIR = Path.home() / ".caw" / "auth"
+
+def default_auth_dir() -> Path:
+    """Return the default auth directory, honoring the ``CAW_AUTH_DIR`` env var.
+
+    Set ``CAW_AUTH_DIR`` (e.g. by an embedding tool that wants caw's state to
+    live inside its own home) to relocate the staging dir. Falls back to
+    ``~/.caw/auth/``. Resolved on every call so the override can be set after
+    import.
+    """
+    override = os.environ.get("CAW_AUTH_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".caw" / "auth"
+
+
+def __getattr__(name: str):
+    # Module-level dynamic AUTH_DIR so `from caw.auth.collector import AUTH_DIR`
+    # picks up the current env var at access time.
+    if name == "AUTH_DIR":
+        return default_auth_dir()
+    raise AttributeError(name)
 
 
 def _resolve_providers(agent_names: list[str]) -> list[AgentAuthProvider]:
@@ -229,7 +249,7 @@ def setup(
         Path to the auth directory.
     """
     src_home = Path(source_home) if source_home else Path.home()
-    auth_dir = Path(dest_dir) if dest_dir else AUTH_DIR
+    auth_dir = Path(dest_dir) if dest_dir else default_auth_dir()
 
     console.print(f"[bold]Collecting credentials into {auth_dir}/[/bold]\n")
 

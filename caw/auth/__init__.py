@@ -3,7 +3,7 @@
 import shutil
 from pathlib import Path
 
-from .collector import AUTH_DIR, setup
+from .collector import default_auth_dir, setup
 from .manifest import Manifest, AgentManifest, ManifestFile
 from .providers import PROVIDERS, AgentAuthProvider, CollectedFile
 from .status import AuthFileStatus, get_docker_flags, get_status, status
@@ -63,7 +63,7 @@ def teardown(auth_dir: str | Path | None = None, force: bool = False) -> None:
         TeardownWouldOrphanSymlinksError: If host symlinks point into the
             auth directory and ``force`` is False.
     """
-    target = Path(auth_dir) if auth_dir else AUTH_DIR
+    target = Path(auth_dir) if auth_dir else default_auth_dir()
     if not target.exists():
         return
 
@@ -88,9 +88,18 @@ def teardown(auth_dir: str | Path | None = None, force: bool = False) -> None:
     shutil.rmtree(target)
 
 
+def __getattr__(name: str):
+    # Re-resolve AUTH_DIR at access time so users who set CAW_AUTH_DIR after
+    # `from caw.auth import AUTH_DIR` still see the override.
+    if name == "AUTH_DIR":
+        return default_auth_dir()
+    raise AttributeError(name)
+
+
 __all__ = [
     "AUTH_DIR",
     "AgentAuthProvider",
+    "default_auth_dir",
     "AgentManifest",
     "AuthFileStatus",
     "CollectedFile",

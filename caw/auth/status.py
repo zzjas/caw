@@ -10,11 +10,10 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from .collector import default_auth_dir
 from .manifest import Manifest, ManifestFile
 
 console = Console()
-
-AUTH_DIR = Path.home() / ".caw" / "auth"
 
 
 @dataclass
@@ -111,7 +110,7 @@ def get_status(
     Raises:
         FileNotFoundError: If the manifest.json doesn't exist in auth_dir.
     """
-    resolved_dir = Path(auth_dir) if auth_dir else AUTH_DIR
+    resolved_dir = Path(auth_dir) if auth_dir else default_auth_dir()
     manifest_path = resolved_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest.json found at {manifest_path}")
@@ -168,7 +167,7 @@ def get_docker_flags(auth_dir: str | Path | None = None) -> str:
     Raises:
         FileNotFoundError: If the manifest.json doesn't exist in auth_dir.
     """
-    resolved_dir = Path(auth_dir) if auth_dir else AUTH_DIR
+    resolved_dir = Path(auth_dir) if auth_dir else default_auth_dir()
     manifest_path = resolved_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No manifest.json found at {manifest_path}")
@@ -193,7 +192,7 @@ def status(agents: list[str] | None = None, auth_dir: str | Path | None = None) 
         agents: Agent names to show, or None for all.
         auth_dir: Custom auth directory. Defaults to ~/.caw/auth/.
     """
-    resolved_dir = Path(auth_dir) if auth_dir else AUTH_DIR
+    resolved_dir = Path(auth_dir) if auth_dir else default_auth_dir()
     manifest_path = resolved_dir / "manifest.json"
     if not manifest_path.exists():
         console.print("[yellow]No auth directory found.[/yellow] Run `caw auth setup` first.")
