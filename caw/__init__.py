@@ -4,6 +4,7 @@ __version__ = "0.1.0"
 
 from caw.agent import Agent, Session, register_provider
 from caw.display import Display, DisplayMode, get_global_display, set_global_display
+from caw.logger import AgentLogger
 from caw.faststats import FastStats
 from caw.storage import JsonlWriter, SessionStore
 from caw.models import (
@@ -45,6 +46,7 @@ register_provider("codex", CodexProvider)
 
 __all__ = [
     "Agent",
+    "AgentLogger",
     "AgentSpec",
     "ClaudeCodeProvider",
     "CodexProvider",

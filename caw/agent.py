@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from caw.display import get_global_display
+from caw.logger import AgentLogger
 from caw.models import AgentSpec, InteractiveResult, MCPServer, ModelTier, ToolGroup, ToolUse, Trajectory, Turn
 from caw.provider import Provider, ProviderSession
 from caw.storage import SessionStore
@@ -103,6 +104,7 @@ class Session:
         tool_handles: list[Any] | None = None,
         auto_wait: bool = True,
         metadata: dict[str, Any] | None = None,
+        logger: AgentLogger | None = None,
     ) -> None:
         self._session = provider_session
         self._store = store
@@ -114,6 +116,9 @@ class Session:
         self._send_lock = threading.Lock()
         self._async_send_lock: asyncio.Lock | None = None
         self._traj_path: str | Path | None = None
+        self._logger = logger
+        if logger is not None:
+            self._session.set_logger(logger)
 
     async def send_async(self, message: str) -> Turn:
         """Async version of :meth:`send` — runs in a thread.
@@ -296,12 +301,14 @@ class Agent:
         stateless_tools: list[Any] | None = None,
         name: str = "",
         description: str = "",
+        logger: AgentLogger | None = None,
         **kwargs: Any,
     ) -> None:
         self._provider_name = provider
         self._provider: Provider | None = None
         self._mcp_servers: list[MCPServer] = []
         self._subagents: list[AgentSpec] = []
+        self._logger = logger
         self._tool_servers: list[Any] = []  # list[MCPServerHandle], lazy import
         if tool_servers:
             for ts in tool_servers:
@@ -504,12 +511,19 @@ class Agent:
         traj_path:
             If set, the trajectory is saved to this path after each
             step and when :meth:`Session.end` is called.
+        logger:
+            Optional generic logger (any object with ``info``/``warn``/
+            ``error`` string methods). If set, every major event — user
+            message, tool call, tool result, assistant text, thinking,
+            turn-end stats — is also emitted as a one-line summary
+            through it. See :mod:`caw.logger`.
         """
         merged = {**self._kwargs, **kwargs}
 
-        # Pop auto_wait and metadata — these are Session concerns, not provider kwargs
+        # Pop auto_wait, metadata, logger — these are Session concerns, not provider kwargs
         auto_wait = merged.pop("auto_wait", True)
         session_metadata: dict[str, Any] = merged.pop("metadata", {})
+        logger: AgentLogger | None = merged.pop("logger", None) or self._logger
         # Agent-level metadata as base, session kwargs override
         if self._metadata:
             session_metadata = {**self._metadata, **session_metadata}
@@ -567,6 +581,7 @@ class Agent:
             tool_handles=all_handles,
             auto_wait=auto_wait,
             metadata=session_metadata,
+            logger=logger,
         )
 
         if traj_path is not None:

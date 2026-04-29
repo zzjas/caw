@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
+from caw.logger import AgentLogger
 from caw.models import InteractiveResult, MCPServer, ModelTier, ToolGroup, Trajectory, Turn
 
 
@@ -49,6 +50,10 @@ class ProviderSession(ABC):
 
     def set_step_callback(self, callback: Callable[[list], None] | None) -> None:
         """Set callback invoked after each step within send()."""
+        pass  # default no-op; concrete providers override
+
+    def set_logger(self, logger: AgentLogger | None) -> None:
+        """Attach a generic logger that receives a one-line summary per event."""
         pass  # default no-op; concrete providers override
 
 

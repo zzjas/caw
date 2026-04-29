@@ -14,6 +14,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from caw.display import Display, get_global_display
+from caw.logger import (
+    AgentLogger,
+    log_metadata,
+    log_text,
+    log_thinking,
+    log_tool_call,
+    log_tool_result,
+    log_turn_end,
+    log_user_message,
+)
 from caw.models import (
     ContentBlock,
     InteractiveResult,
@@ -167,6 +177,7 @@ class ClaudeCodeSession(ProviderSession):
         self._mcp_config_path: str | None = None
         self._last_raw_output: str = ""
         self._step_callback = None
+        self._logger: AgentLogger | None = None
 
     # ------------------------------------------------------------------
     # MCP config helpers
@@ -210,6 +221,14 @@ class ClaudeCodeSession(ProviderSession):
                     session=self._session_id,
                 )
             display.on_user_message(message)
+        if not self._has_sent:
+            log_metadata(
+                self._logger,
+                agent="claude_code",
+                model=self._model or "",
+                session=self._session_id,
+            )
+        log_user_message(self._logger, message)
 
         cmd = [
             "claude",
@@ -304,6 +323,7 @@ class ClaudeCodeSession(ProviderSession):
 
         if display:
             display.on_turn_end(turn.result, usage, duration_ms)
+        log_turn_end(self._logger, usage, duration_ms)
 
         self._turns.append(turn)
         self._total_usage = self._total_usage + turn.usage
@@ -320,6 +340,9 @@ class ClaudeCodeSession(ProviderSession):
 
     def set_step_callback(self, callback):
         self._step_callback = callback
+
+    def set_logger(self, logger: AgentLogger | None) -> None:
+        self._logger = logger
 
     # ------------------------------------------------------------------
     # Per-event processing
@@ -340,19 +363,25 @@ class ClaudeCodeSession(ProviderSession):
                 self._model = event.get("model", "")
                 if display and self._model:
                     display.on_metadata(model=self._model)
+                if self._model:
+                    log_metadata(self._logger, model=self._model)
 
         elif event_type == "assistant":
             new_blocks = self._parse_assistant_blocks(event)
             for block in new_blocks:
                 blocks.append(block)
-                if display:
-                    if isinstance(block, TextBlock):
+                if isinstance(block, TextBlock):
+                    if display:
                         display.on_text(block)
-                    elif isinstance(block, ThinkingBlock):
+                    log_text(self._logger, block)
+                elif isinstance(block, ThinkingBlock):
+                    if display:
                         display.on_thinking(block)
-                    elif isinstance(block, ToolUse):
+                    log_thinking(self._logger, block)
+                elif isinstance(block, ToolUse):
+                    if display:
                         display.on_tool_call(block)
-                if isinstance(block, ToolUse):
+                    log_tool_call(self._logger, block)
                     tool_blocks[block.id] = block
 
         elif event_type == "user":
@@ -385,6 +414,7 @@ class ClaudeCodeSession(ProviderSession):
                             tool_blocks[tid].is_error = is_error
                             if display:
                                 display.on_tool_result(tool_blocks[tid])
+                            log_tool_result(self._logger, tool_blocks[tid])
 
         elif event_type == "result":
             return self._parse_usage(event), event.get("duration_ms", 0)

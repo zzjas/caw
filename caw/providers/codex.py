@@ -14,6 +14,16 @@ from pathlib import Path
 from typing import Any
 
 from caw.display import Display, get_global_display
+from caw.logger import (
+    AgentLogger,
+    log_metadata,
+    log_text,
+    log_thinking,
+    log_tool_call,
+    log_tool_result,
+    log_turn_end,
+    log_user_message,
+)
 from caw.models import (
     ContentBlock,
     MCPServer,
@@ -163,9 +173,13 @@ class CodexSession(ProviderSession):
         self._total_duration_ms = 0
         self._last_raw_output: str = ""
         self._step_callback = None
+        self._logger: AgentLogger | None = None
 
     def set_step_callback(self, callback):
         self._step_callback = callback
+
+    def set_logger(self, logger: AgentLogger | None) -> None:
+        self._logger = logger
 
     # ------------------------------------------------------------------
     # MCP config helpers
@@ -198,6 +212,14 @@ class CodexSession(ProviderSession):
                     session=self._session_id,
                 )
             display.on_user_message(message)
+        if not self._has_sent:
+            log_metadata(
+                self._logger,
+                agent="codex",
+                model=self._model or "",
+                session=self._session_id,
+            )
+        log_user_message(self._logger, message)
 
         # Build the prompt (prepend system prompt on first turn)
         prompt = message
@@ -300,6 +322,7 @@ class CodexSession(ProviderSession):
 
         if display:
             display.on_turn_end(turn.result, usage, 0)
+        log_turn_end(self._logger, usage, 0)
 
         self._turns.append(turn)
         self._total_usage = self._total_usage + turn.usage
@@ -345,6 +368,7 @@ class CodexSession(ProviderSession):
                 tool_blocks[tool_id] = block
                 if display:
                     display.on_tool_call(block)
+                log_tool_call(self._logger, block)
 
             elif item_type == "mcp_tool_call":
                 server = item.get("server", "")
@@ -359,6 +383,7 @@ class CodexSession(ProviderSession):
                 tool_blocks[tool_id] = block
                 if display:
                     display.on_tool_call(block)
+                log_tool_call(self._logger, block)
 
             elif item_type == "file_change":
                 block = ToolUse(
@@ -370,6 +395,7 @@ class CodexSession(ProviderSession):
                 tool_blocks[tool_id] = block
                 if display:
                     display.on_tool_call(block)
+                log_tool_call(self._logger, block)
 
         elif event_type in ("item.completed", "item.updated"):
             item = event.get("item", {})
@@ -383,6 +409,8 @@ class CodexSession(ProviderSession):
                     tool_blocks[tool_id].is_error = item.get("exit_code", 0) != 0
                     if display and is_final:
                         display.on_tool_result(tool_blocks[tool_id])
+                    if is_final:
+                        log_tool_result(self._logger, tool_blocks[tool_id])
 
             elif item_type == "mcp_tool_call":
                 tool_id = item.get("id", "")
@@ -406,6 +434,8 @@ class CodexSession(ProviderSession):
                         tool_blocks[tool_id].is_error = True
                     if display and is_final:
                         display.on_tool_result(tool_blocks[tool_id])
+                    if is_final:
+                        log_tool_result(self._logger, tool_blocks[tool_id])
 
             elif item_type == "file_change":
                 tool_id = item.get("id", "")
@@ -413,6 +443,8 @@ class CodexSession(ProviderSession):
                     tool_blocks[tool_id].output = item.get("patch", item.get("content", ""))
                     if display and is_final:
                         display.on_tool_result(tool_blocks[tool_id])
+                    if is_final:
+                        log_tool_result(self._logger, tool_blocks[tool_id])
 
             elif item_type == "reasoning" and is_final:
                 text = item.get("text", "")
@@ -421,6 +453,7 @@ class CodexSession(ProviderSession):
                     blocks.append(block)
                     if display:
                         display.on_thinking(block)
+                    log_thinking(self._logger, block)
 
             elif item_type == "agent_message" and is_final:
                 text = item.get("text", "")
@@ -429,6 +462,7 @@ class CodexSession(ProviderSession):
                     blocks.append(block)
                     if display:
                         display.on_text(block)
+                    log_text(self._logger, block)
 
         elif event_type == "turn.completed":
             return self._parse_usage(event)
@@ -446,7 +480,10 @@ class CodexSession(ProviderSession):
                 blocks.append(block)
                 if display:
                     display.on_text(block)
+                log_text(self._logger, block)
             else:
+                if self._logger:
+                    self._logger.error(f"codex turn failed: {error_msg}")
                 raise RuntimeError(f"Codex turn failed: {error_msg}")
 
         return None
