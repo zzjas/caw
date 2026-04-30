@@ -491,6 +491,7 @@ class ClaudeCodeSession(ProviderSession):
             turns=list(self._turns),
             usage=self._total_usage,
             duration_ms=self._total_duration_ms,
+            reasoning=self._reasoning or "",
             metadata={},
         )
 
