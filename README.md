@@ -1,6 +1,6 @@
 # caw
 
-**Coding Agent Wrapper** — a Python library and CLI for orchestrating coding agents (Claude Code, Codex) with a unified interface, MCP tool servers, and credential management for Docker containers.
+**Coding Agent Wrapper** — a Python library and CLI for orchestrating coding agents (Claude Code, Codex, opencode) with a unified interface, MCP tool servers, and credential management for Docker containers.
 
 ## Install
 
@@ -61,6 +61,7 @@ with agent.start_session() as session:
 |----------|-----|---------------|
 | Claude Code | `claude` | `claude_code` |
 | Codex | `codex` | `codex` |
+| opencode | `opencode` | `opencode` |
 
 Set via constructor, environment variable, or at runtime:
 
@@ -167,7 +168,7 @@ Sessions are persisted to JSONL in `caw_data/` by default.
 
 ## CLI: `caw auth` — Credential Management for Docker Containers
 
-Manages coding agent OAuth credentials so they stay in sync between your host and Docker containers. Supports Claude Code and Codex. Host credential files are never modified — they are bind-mounted into the container at run time.
+Manages coding agent OAuth credentials so they stay in sync between your host and Docker containers. Supports Claude Code, Codex, and opencode. Host credential files are never modified — they are bind-mounted into the container at run time.
 
 ```bash
 caw auth setup                        # snapshot configs, write mount manifest

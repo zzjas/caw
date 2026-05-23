@@ -260,6 +260,78 @@ class CodexAuthProvider(AgentAuthProvider):
 
 
 # ---------------------------------------------------------------------------
+# opencode
+# ---------------------------------------------------------------------------
+
+
+class OpencodeAuthProvider(AgentAuthProvider):
+    name = "opencode"
+
+    def validate(self, src_home: Path) -> list[str]:
+        missing: list[str] = []
+        if not (src_home / ".local" / "share" / "opencode" / "auth.json").exists():
+            missing.append(str(src_home / ".local" / "share" / "opencode" / "auth.json"))
+        return missing
+
+    def describe(self, src_home: Path) -> str:
+        try:
+            with open(src_home / ".local" / "share" / "opencode" / "auth.json") as f:
+                auth_data = json.load(f)
+            providers = list(auth_data.keys())
+            if not providers:
+                return "Auth file present (no providers configured)"
+            kinds = []
+            for p in providers:
+                entry = auth_data.get(p) or {}
+                kinds.append(f"{p}({entry.get('type', 'unknown')})")
+            return f"Providers: {', '.join(kinds)}"
+        except Exception:
+            return "Could not read auth info"
+
+    def collect(self, src_home: Path) -> list[CollectedFile]:
+        files: list[CollectedFile] = []
+
+        # auth.json — credential (bind-mounted for token refresh write-back)
+        auth_src = src_home / ".local" / "share" / "opencode" / "auth.json"
+        with open(auth_src, "rb") as f:
+            auth_content = f.read()
+        files.append(
+            CollectedFile(
+                manifest_file=ManifestFile(
+                    src="opencode/auth.json",
+                    container_target=".local/share/opencode/auth.json",
+                    host_original=".local/share/opencode/auth.json",
+                    type="credential",
+                    strategy="bind",
+                    mode="0600",
+                ),
+                content=auth_content,
+            )
+        )
+
+        # opencode.jsonc / opencode.json — config, copied (no local-project paths to strip)
+        for fname in ("opencode.jsonc", "opencode.json"):
+            cfg = src_home / ".config" / "opencode" / fname
+            if cfg.exists():
+                files.append(
+                    CollectedFile(
+                        manifest_file=ManifestFile(
+                            src=f"opencode/{fname}",
+                            container_target=f".config/opencode/{fname}",
+                            host_original=f".config/opencode/{fname}",
+                            type="config",
+                            strategy="copy",
+                            mode="0644",
+                        ),
+                        content=cfg.read_bytes(),
+                    )
+                )
+                break  # only one of the two should exist
+
+        return files
+
+
+# ---------------------------------------------------------------------------
 # Provider registry
 # ---------------------------------------------------------------------------
 
@@ -268,5 +340,6 @@ PROVIDERS: dict[str, AgentAuthProvider] = {
     for p in [
         ClaudeAuthProvider(),
         CodexAuthProvider(),
+        OpencodeAuthProvider(),
     ]
 }

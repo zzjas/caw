@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coding-agent-wrapper"
-version = "0.1.3"
+version = "0.1.4"
 description = "Unified Python library and CLI for orchestrating coding agents (Claude Code, Codex, etc.) with MCP tool servers and credential management."
 readme = "README.md"
 requires-python = ">=3.10"
