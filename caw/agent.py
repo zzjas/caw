@@ -65,6 +65,36 @@ def _resolve_provider(name: str | None) -> Provider:
     return _PROVIDER_REGISTRY[provider_name]()
 
 
+def _encode_resume_handle(provider: str, session_id: str, resume_key: str) -> str:
+    """Pack everything needed to resume — provider, caw session id, and the
+    backend resume key — into a JSON handle string.  Self-contained so a
+    session can be resumed in a new process with or without the original
+    ``data_dir``."""
+    return json.dumps(
+        {
+            "version": 1,
+            "provider": provider,
+            "session_id": session_id,
+            "resume_key": resume_key,
+        }
+    )
+
+
+def _decode_resume_handle(handle: str) -> dict[str, Any] | None:
+    """Parse a JSON handle produced by :func:`_encode_resume_handle`.
+
+    Returns the payload dict, or ``None`` if *handle* is not a self-contained
+    handle (e.g. a bare session id), so callers can fall back to disk lookup.
+    """
+    try:
+        data = json.loads(handle)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(data, dict) and data.get("resume_key"):
+        return data
+    return None
+
+
 def _attach_subagent_trajectories(turn: Turn, traj_dir: str | None) -> None:
     """Scan a turn's tool outputs for trajectory markers and attach them.
 
@@ -265,6 +295,32 @@ class Session:
         session._async_send_lock = None
         session._loaded_trajectory = traj
         return session
+
+    @property
+    def resume_handle(self) -> str:
+        """Opaque string for resuming this session later, possibly in another
+        process.
+
+        Store it anywhere (a database, a file, …) and pass it to
+        :meth:`Agent.resume_session`.  The handle is self-contained: it carries
+        the backend resume key, so resuming works even without the original
+        ``data_dir`` (you just won't get the prior trajectory restored).  If
+        the resuming :class:`Agent` *does* share the same ``data_dir``, the
+        full history is restored and new turns are appended.
+
+        Raises if the backend has not yet assigned a resume key — send at least
+        one message first.
+        """
+        traj = self.trajectory
+        if not self._readonly and self._session is not None:
+            resume_key = self._session.resume_key
+        else:
+            resume_key = _resolve_provider(traj.agent).resume_key_from_trajectory(traj)
+        if not resume_key:
+            raise RuntimeError(
+                "No resume key available yet — send at least one message before requesting a resume handle."
+            )
+        return _encode_resume_handle(traj.agent, traj.session_id, resume_key)
 
     @property
     def session_dir(self) -> Path | None:
@@ -519,26 +575,7 @@ class Agent:
             through it. See :mod:`caw.logger`.
         """
         merged = {**self._kwargs, **kwargs}
-
-        # Pop auto_wait, metadata, logger — these are Session concerns, not provider kwargs
-        auto_wait = merged.pop("auto_wait", True)
-        session_metadata: dict[str, Any] = merged.pop("metadata", {})
-        logger: AgentLogger | None = merged.pop("logger", None) or self._logger
-        # Agent-level metadata as base, session kwargs override
-        if self._metadata:
-            session_metadata = {**self._metadata, **session_metadata}
-
-        # Resolve model tier to concrete model string
-        model = merged.get("model")
-        if isinstance(model, ModelTier):
-            merged["model"] = self.provider.resolve_model(model)
-
-        # Resolve tool restrictions: default to ALL - INTERACTION for automated pipelines
-        tools = merged.pop("tools", None)
-        if tools is None:
-            tools = ToolGroup.ALL - ToolGroup.INTERACTION
-        restrictions = self.provider.resolve_tool_restrictions(tools)
-        merged.update(restrictions)
+        auto_wait, session_metadata, logger = self._pop_session_opts(merged)
 
         # Generate session_id early so the JSONL path is known before MCP configs
         session_id: str | None = None
@@ -547,26 +584,7 @@ class Agent:
             session_id = str(uuid_mod.uuid4())
             store = SessionStore(self._data_dir, session_id)
 
-        # Create temp dir for subagent trajectory files (if subagents exist)
-        subagent_traj_dir: str | None = None
-        if self._subagents:
-            subagent_traj_dir = tempfile.mkdtemp(prefix="caw_subagent_traj_")
-
-        # Collect all tool server handles (user-registered + subagent)
-        all_handles: list[Any] = list(self._tool_servers)
-        if self._subagents:
-            all_handles += self._subagent_tool_servers(
-                subagent_traj_dir,  # type: ignore[arg-type]
-                jsonl_path=str(store.jsonl_path) if store else None,
-            )
-
-        # Start all HTTP tool servers and collect their MCPServer configs
-        for handle in all_handles:
-            handle.start_sync()
-
-        all_mcp = list(self._mcp_servers)
-        for handle in all_handles:
-            all_mcp.append(MCPServer(name=handle.server_id, url=handle.url))
+        subagent_traj_dir, all_handles, all_mcp = self._build_tool_context(merged, store)
 
         # Pass our session_id so the provider uses it (instead of generating its own)
         if session_id:
@@ -591,3 +609,147 @@ class Agent:
             store.write_metadata(session.trajectory)
 
         return session
+
+    def resume_session(self, resume_handle: str, **kwargs: Any) -> Session:
+        """Resume a session from a handle produced by :attr:`Session.resume_handle`.
+
+        Returns a live :class:`Session` whose next :meth:`Session.send`
+        continues the original conversation.
+
+        - **Without ``data_dir`` (or if the session isn't on disk):** the backend
+          conversation is resumed using the key embedded in the handle, but
+          caw's trajectory starts empty (no prior turns restored).
+        - **With the original ``data_dir``:** the full trajectory is restored
+          and new turns are appended to the original session directory.
+
+        A bare session id is also accepted in place of a full handle, but only
+        when ``data_dir`` is set (the resume key is then read from disk).
+        """
+        decoded = _decode_resume_handle(resume_handle)
+        if decoded is not None:
+            provider_name = decoded["provider"]
+            session_id = decoded["session_id"]
+            resume_key: str | None = decoded["resume_key"]
+            if provider_name != self.provider.name:
+                raise ValueError(
+                    f"Handle is for provider {provider_name!r} but this Agent uses {self.provider.name!r}."
+                )
+        else:
+            # Treat the string as a bare caw session id; the resume key must
+            # then come from the on-disk trajectory.
+            session_id = resume_handle
+            resume_key = None
+
+        # Load the persisted trajectory if a data_dir is available.
+        trajectory: Trajectory | None = None
+        store: SessionStore | None = None
+        had_existing = False
+        if self._data_dir:
+            traj_path = Path(self._data_dir) / "sessions" / session_id / "trajectory.json"
+            if traj_path.exists():
+                with open(traj_path) as f:
+                    trajectory = Trajectory.from_dict(json.load(f))
+                had_existing = True
+
+        if resume_key is None:
+            if trajectory is None:
+                raise FileNotFoundError(
+                    f"Cannot resume {resume_handle!r}: it is not a self-contained "
+                    f"handle and no persisted session was found"
+                    + (f" under {self._data_dir}" if self._data_dir else " (no data_dir set)")
+                    + "."
+                )
+            resume_key = self.provider.resume_key_from_trajectory(trajectory)
+            if not resume_key:
+                raise ValueError(f"Cannot resume {resume_handle!r}: no resume key was persisted for this session.")
+
+        merged = {**self._kwargs, **kwargs}
+        auto_wait, session_metadata, logger = self._pop_session_opts(merged)
+
+        if self._data_dir:
+            store = SessionStore(self._data_dir, session_id, resume=True)
+
+        subagent_traj_dir, all_handles, all_mcp = self._build_tool_context(merged, store)
+
+        # session_id is fixed by the handle/trajectory, not generated.
+        merged.pop("session_id", None)
+        provider_session = self.provider.resume_session(
+            mcp_servers=all_mcp,
+            session_id=session_id,
+            resume_key=resume_key,
+            trajectory=trajectory,
+            **merged,
+        )
+
+        session = Session(
+            provider_session,
+            store=store,
+            subagent_traj_dir=subagent_traj_dir,
+            tool_handles=all_handles,
+            auto_wait=auto_wait,
+            metadata=session_metadata,
+            logger=logger,
+        )
+        # Fresh on-disk session (data_dir set but nothing persisted yet): seed
+        # the metadata line like start_session does.
+        if store is not None and not had_existing:
+            store.write_metadata(session.trajectory)
+        return session
+
+    def _pop_session_opts(self, merged: dict[str, Any]) -> tuple[bool, dict[str, Any], AgentLogger | None]:
+        """Strip Session-only kwargs out of *merged* and resolve a model tier.
+
+        Returns ``(auto_wait, session_metadata, logger)``; *merged* is left
+        holding only provider ``start_session``/``resume_session`` kwargs.
+        """
+        auto_wait = merged.pop("auto_wait", True)
+        session_metadata: dict[str, Any] = merged.pop("metadata", {})
+        logger: AgentLogger | None = merged.pop("logger", None) or self._logger
+        # Agent-level metadata as base, session kwargs override
+        if self._metadata:
+            session_metadata = {**self._metadata, **session_metadata}
+
+        # Resolve model tier to concrete model string
+        model = merged.get("model")
+        if isinstance(model, ModelTier):
+            merged["model"] = self.provider.resolve_model(model)
+        return auto_wait, session_metadata, logger
+
+    def _build_tool_context(
+        self, merged: dict[str, Any], store: SessionStore | None
+    ) -> tuple[str | None, list[Any], list[MCPServer]]:
+        """Resolve tool restrictions and start tool/subagent servers.
+
+        Consumes ``tools`` from *merged* (applying the default), updates
+        *merged* with provider-specific tool restriction kwargs, and returns
+        ``(subagent_traj_dir, all_handles, all_mcp)``.
+        """
+        # Resolve tool restrictions: default to ALL - INTERACTION for automated pipelines
+        tools = merged.pop("tools", None)
+        if tools is None:
+            tools = ToolGroup.ALL - ToolGroup.INTERACTION
+        restrictions = self.provider.resolve_tool_restrictions(tools)
+        merged.update(restrictions)
+
+        # Create temp dir for subagent trajectory files (if subagents exist)
+        subagent_traj_dir: str | None = None
+        if self._subagents:
+            subagent_traj_dir = tempfile.mkdtemp(prefix="caw_subagent_traj_")
+
+        # Collect all tool server handles (user-registered + subagent)
+        all_handles: list[Any] = list(self._tool_servers)
+        if self._subagents:
+            all_handles += self._subagent_tool_servers(
+                subagent_traj_dir,  # type: ignore[arg-type]
+                jsonl_path=str(store.jsonl_path) if store else None,
+            )
+
+        # Start all HTTP tool servers and collect their MCPServer configs
+        for handle in all_handles:
+            handle.start_sync()
+
+        all_mcp = list(self._mcp_servers)
+        for handle in all_handles:
+            all_mcp.append(MCPServer(name=handle.server_id, url=handle.url))
+
+        return subagent_traj_dir, all_handles, all_mcp

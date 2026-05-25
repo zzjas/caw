@@ -44,6 +44,33 @@ class ProviderSession(ABC):
         return None
 
     @property
+    def resume_key(self) -> str | None:
+        """The provider-side key needed to resume this conversation.
+
+        This is whatever the backend CLI accepts to continue an existing
+        session (claude's session id, codex's thread id, opencode's session
+        id).  ``None`` until the backend has assigned one — typically after the
+        first :meth:`send`.
+        """
+        return None
+
+    def _restore_from_trajectory(self, trajectory: Trajectory) -> None:
+        """Re-seed a freshly built session with a prior trajectory's state.
+
+        Used by :meth:`Provider.resume_session` so a session reconstructed in a
+        new process carries the original history, usage totals, and creation
+        time forward.  All concrete provider sessions share these attribute
+        names; resume-specific keys (thread id, etc.) are restored by the
+        provider's own ``resume_session``.
+        """
+        self._turns = list(trajectory.turns)
+        self._total_usage = trajectory.usage
+        self._total_duration_ms = trajectory.duration_ms
+        if trajectory.created_at:
+            self._created_at = trajectory.created_at
+        self._has_sent = True
+
+    @property
     def last_raw_output(self) -> str | None:
         """Raw CLI stdout from the most recent send() call (if available)."""
         return None
@@ -138,3 +165,35 @@ class Provider(ABC):
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> ProviderSession:
         """Create and return a new provider session."""
         ...
+
+    def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
+        """Extract the resume key from a persisted *trajectory*.
+
+        Mirrors :attr:`ProviderSession.resume_key` but reads from a stored
+        trajectory rather than a live session.  Returns ``None`` if the
+        trajectory predates resume support or was never sent to.
+        """
+        return None
+
+    def resume_session(
+        self,
+        mcp_servers: list[MCPServer],
+        *,
+        session_id: str,
+        resume_key: str,
+        trajectory: Trajectory | None = None,
+        **kwargs: Any,
+    ) -> ProviderSession:
+        """Rebuild a live session ready to continue an existing conversation.
+
+        ``resume_key`` is the provider-side key the backend CLI needs to resume
+        (see :attr:`ProviderSession.resume_key`); ``session_id`` is caw's own
+        bookkeeping id (the on-disk directory name).  The next
+        :meth:`ProviderSession.send` must resume rather than start fresh.
+
+        When ``trajectory`` is given, the prior history/usage is carried forward
+        via :meth:`ProviderSession._restore_from_trajectory`.  When it is
+        ``None`` (e.g. resuming without a ``data_dir``), the backend session is
+        still resumed but caw's trajectory starts empty.
+        """
+        raise NotImplementedError(f"{self.name} provider does not support resuming sessions.")

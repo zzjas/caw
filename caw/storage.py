@@ -121,12 +121,19 @@ class SessionStore:
                 000_raw_output.jsonl
     """
 
-    def __init__(self, data_dir: str | Path, session_id: str) -> None:
+    def __init__(self, data_dir: str | Path, session_id: str, resume: bool = False) -> None:
         self._session_dir = Path(data_dir) / "sessions" / session_id
         self._turns_dir = self._session_dir / "turns"
         self._turns_dir.mkdir(parents=True, exist_ok=True)
-        self._turn_counter = 0
+        # On resume, continue numbering after the existing turn files so we
+        # append to — rather than overwrite — the original session's record.
+        self._turn_counter = self._next_turn_index() if resume else 0
         self._jsonl = JsonlWriter(self._session_dir / "traj.jsonl")
+
+    def _next_turn_index(self) -> int:
+        """One past the highest ``NNN_input.txt`` index already on disk."""
+        indices = [int(p.name[:3]) for p in self._turns_dir.glob("*_input.txt") if p.name[:3].isdigit()]
+        return max(indices) + 1 if indices else 0
 
     @property
     def session_dir(self) -> Path:

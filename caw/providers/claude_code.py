@@ -476,6 +476,11 @@ class ClaudeCodeSession(ProviderSession):
         return self._session_id
 
     @property
+    def resume_key(self) -> str | None:
+        # claude resumes via `--resume <session_id>`; the key is the id itself.
+        return self._session_id
+
+    @property
     def last_raw_output(self) -> str:
         return self._last_raw_output
 
@@ -677,3 +682,31 @@ class ClaudeCodeProvider(Provider):
             disallowed_tools=disallowed_tools,
             reasoning=reasoning,
         )
+
+    def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
+        # claude's resume key is its session id.
+        return trajectory.session_id or None
+
+    def resume_session(
+        self,
+        mcp_servers: list[MCPServer],
+        *,
+        session_id: str,
+        resume_key: str,
+        trajectory: Trajectory | None = None,
+        **kwargs: Any,
+    ) -> ClaudeCodeSession:
+        # For claude the resume key *is* the session id (passed to the CLI as
+        # --resume once _has_sent is set).
+        session = ClaudeCodeSession(
+            mcp_servers=mcp_servers,
+            model=kwargs.get("model") or (trajectory.model if trajectory else None),
+            system_prompt=(trajectory.system_prompt if trajectory else None) or None,
+            session_id=resume_key,
+            disallowed_tools=kwargs.get("disallowed_tools"),
+            reasoning=(trajectory.reasoning if trajectory else None) or None,
+        )
+        session._has_sent = True
+        if trajectory is not None:
+            session._restore_from_trajectory(trajectory)
+        return session

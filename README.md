@@ -55,6 +55,50 @@ with agent.start_session() as session:
 # session.end() called automatically, returns full Trajectory
 ```
 
+### Resuming sessions across processes
+
+Grab a `resume_handle` (a string) and store it anywhere — a database, a file, a
+queue. Later, in a different process, resume the conversation:
+
+```python
+# Process 1: start, communicate, persist the handle.
+agent = Agent(provider="claude_code")
+session = agent.start_session()
+session.send("My deploy target is staging-eu. Remember that.")
+handle = session.resume_handle          # store this string
+session.end()
+
+# Process 2 (later, after a restart): resume by handle.
+agent = Agent(provider="claude_code")
+session = agent.resume_session(handle)
+print(session.send("Where am I deploying?").result)   # -> "staging-eu"
+session.end()
+```
+
+The handle is a **self-contained JSON string** carrying the backend's own resume
+key, so resuming works even with no `data_dir` — the underlying CLI still has the
+conversation:
+
+```json
+{"version": 1, "provider": "claude_code", "session_id": "bd260210-…", "resume_key": "bd260210-…"}
+```
+
+(`resume_key` is claude's session id, Codex's `thread_id`, or opencode's session
+id — for codex/opencode it differs from `session_id`.) Send at least one message
+before reading `resume_handle`; the backend assigns its key on the first
+exchange. Works across all three providers.
+
+> The handle grants resume access to the conversation — treat it like a secret,
+> not an opaque random id.
+
+`data_dir` is optional and additive:
+
+| | without `data_dir` | with the original `data_dir` |
+|---|---|---|
+| backend conversation | resumed | resumed |
+| caw trajectory | starts empty | full history restored |
+| new turns | not persisted | appended to the original session dir |
+
 ### Providers
 
 | Provider | CLI | Provider name |

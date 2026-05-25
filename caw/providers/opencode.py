@@ -512,6 +512,12 @@ class OpencodeSession(ProviderSession):
         return self._session_id
 
     @property
+    def resume_key(self) -> str | None:
+        # opencode resumes via `--session <opencode_session_id>` (the CLI's own
+        # id, captured from the event stream — distinct from caw's session_id).
+        return self._opencode_session_id
+
+    @property
     def last_raw_output(self) -> str:
         return self._last_raw_output
 
@@ -580,6 +586,33 @@ class OpencodeProvider(Provider):
             reasoning=kwargs.get("reasoning"),
             disabled_tools=kwargs.get("disabled_tools"),
         )
+
+    def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
+        return trajectory.metadata.get("opencode_session_id")
+
+    def resume_session(
+        self,
+        mcp_servers: list[MCPServer],
+        *,
+        session_id: str,
+        resume_key: str,
+        trajectory: Trajectory | None = None,
+        **kwargs: Any,
+    ) -> OpencodeSession:
+        session = OpencodeSession(
+            mcp_servers=mcp_servers,
+            model=kwargs.get("model") or (trajectory.model if trajectory else None),
+            system_prompt=(trajectory.system_prompt if trajectory else None) or None,
+            session_id=session_id,
+            reasoning=(trajectory.reasoning if trajectory else None) or None,
+            disabled_tools=kwargs.get("disabled_tools"),
+        )
+        # The opencode CLI resumes via `--session <opencode_session_id>`.
+        session._opencode_session_id = resume_key
+        session._has_sent = True
+        if trajectory is not None:
+            session._restore_from_trajectory(trajectory)
+        return session
 
     def start_interactive(self, initial_prompt, mcp_servers, capture_bytes=0, **kwargs):  # type: ignore[override]
         """Launch ``opencode`` interactively (TUI) with an initial prompt.

@@ -514,6 +514,11 @@ class CodexSession(ProviderSession):
         return self._session_id
 
     @property
+    def resume_key(self) -> str | None:
+        # codex resumes via `codex exec resume <thread_id>`.
+        return self._thread_id
+
+    @property
     def last_raw_output(self) -> str:
         return self._last_raw_output
 
@@ -530,7 +535,9 @@ class CodexSession(ProviderSession):
             turns=list(self._turns),
             usage=self._total_usage,
             duration_ms=self._total_duration_ms,
-            metadata={},
+            # thread_id is the codex-side resume key; persist it so the session
+            # can be resumed in a new process (see CodexProvider.resume_session).
+            metadata={"thread_id": self._thread_id} if self._thread_id else {},
         )
 
     def end(self) -> Trajectory:
@@ -599,3 +606,30 @@ class CodexProvider(Provider):
             reasoning=kwargs.get("reasoning"),
             sandbox=kwargs.get("sandbox"),
         )
+
+    def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
+        return trajectory.metadata.get("thread_id")
+
+    def resume_session(
+        self,
+        mcp_servers: list[MCPServer],
+        *,
+        session_id: str,
+        resume_key: str,
+        trajectory: Trajectory | None = None,
+        **kwargs: Any,
+    ) -> CodexSession:
+        session = CodexSession(
+            mcp_servers=mcp_servers,
+            model=kwargs.get("model") or (trajectory.model if trajectory else None),
+            system_prompt=(trajectory.system_prompt if trajectory else None) or None,
+            session_id=session_id,
+            reasoning=(trajectory.reasoning if trajectory else None) or None,
+            sandbox=kwargs.get("sandbox"),
+        )
+        # The codex CLI resumes via `codex exec resume <thread_id>`.
+        session._thread_id = resume_key
+        session._has_sent = True
+        if trajectory is not None:
+            session._restore_from_trajectory(trajectory)
+        return session
