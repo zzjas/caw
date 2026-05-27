@@ -117,6 +117,73 @@ os.environ["CAW_PROVIDER"] = "codex"
 agent.set_provider("codex")
 ```
 
+### Auto-provider mode
+
+Don't want to hard-code one provider? Give caw a **fallback order** and let it
+use whatever is available at runtime. caw selects the first *installed* provider
+and, on the first send, transparently moves to the next one if that provider
+fails (CLI missing, auth expired) or is rate-limited — no exception handling or
+provider-picking on your side.
+
+```python
+import caw
+from caw import Agent
+
+caw.set_provider_order(["claude", "codex", "opencode"])  # set once, globally
+
+agent = Agent(provider="auto")            # uses the global order
+traj = agent.completion("Explain this repo")
+print(f"[{traj.agent}] {traj.result}")    # whichever provider handled it
+```
+
+The order can come from (highest priority first):
+
+```python
+Agent(provider=["claude", "codex"])   # explicit per-agent order
+caw.set_provider_order([...])          # global default, used by provider="auto"
+os.environ["CAW_PROVIDER"] = "claude,codex,opencode"   # env var, comma list
+```
+
+A single name (`provider="claude"`) stays pinned — no fallback. Once a provider
+produces the first turn the session is committed to it (conversation context
+can't move across CLIs), so later failures propagate normally.
+
+> In auto mode prefer a `ModelTier` (or no model) over a concrete model string:
+> tiers are re-resolved per provider so model selection stays portable across
+> the fallback. A concrete model string is dropped when falling back to a
+> different provider.
+
+See [`examples/auto_provider.py`](examples/auto_provider.py).
+
+### Provider health / availability
+
+Check whether a provider is set up correctly — without committing to using it.
+caw reports **raw signals** (it forms no "available" verdict, so you write your
+own predicate). The default check is fast and free; `live=True` round-trips a
+tiny probe to confirm the provider responds and isn't rate-limited.
+
+```python
+from caw import Agent, check_providers
+
+for h in check_providers():               # fast: no network, no token cost
+    print(h.provider, h.installed, h.binary_path,
+          h.auth.detail if h.auth else None)
+
+# Compose your own notion of "available":
+usable = [h.provider for h in check_providers()
+          if h.installed and not (h.auth and h.auth.token_expired)]
+
+# Per-agent, with an optional live probe (costs one request):
+h = Agent(provider="codex").check_health(live=True)
+if h.rate_limited:
+    print(f"codex rate-limited, ~{h.wait_minutes}m until reset")
+```
+
+`ProviderHealth` exposes `installed`, `binary_path`, `auth` (an `AuthSignal`
+with `present` / `token_expired` / `token_expires_at` / `detail`), and — after a
+live probe — `probed` / `rate_limited` / `wait_minutes` / `error`. See
+[`examples/health.py`](examples/health.py) or run `caw doctor`.
+
 ### MCP tool servers
 
 Attach MCP servers so the agent can call external tools:
@@ -204,11 +271,21 @@ Sessions are persisted to JSONL in `caw_data/` by default.
 
 | Variable | Purpose |
 |----------|---------|
-| `CAW_PROVIDER` | Default provider (`claude_code`, `codex`) |
+| `CAW_PROVIDER` | Default provider, or a comma-separated fallback order (`claude_code,codex,opencode`) |
 | `CAW_MODEL` | Default model name |
 | `CAW_EFFORT` | Default reasoning effort (`high`, `medium`, `low`) |
 
 ---
+
+## CLI: `caw doctor` — Provider Health
+
+Print a table of each provider's health signals — whether the CLI is installed,
+where the binary is, and what caw can tell about its credentials.
+
+```bash
+caw doctor            # fast: installed + credential signals (no token cost)
+caw doctor --live     # also probe each provider (costs one request each)
+```
 
 ## CLI: `caw auth` — Credential Management for Docker Containers
 
