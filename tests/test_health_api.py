@@ -128,8 +128,10 @@ class TestCheckProviders:
     def test_default_lists_distinct_providers(self):
         healths = check_providers()
         names = [h.provider for h in healths]
-        # built-in providers, deduped across aliases
-        assert names == ["claude_code", "codex", "opencode"]
+        # built-in providers present, deduped across aliases (other providers
+        # may be registered by tests sharing this process, so check a subset)
+        assert {"claude_code", "codex", "opencode"} <= set(names)
+        assert len(names) == len(set(names))  # no provider class appears twice
 
     def test_named_subset_dedups_aliases(self):
         healths = check_providers(["claude", "cc", "claude_code", "codex"])

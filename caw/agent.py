@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import uuid as uuid_mod
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -62,10 +63,72 @@ def register_provider(name: str, cls: type[Provider]) -> None:
 def _resolve_provider(name: str | None) -> Provider:
     """Resolve provider: explicit name > env var > default."""
     provider_name = name or os.environ.get(CAW_PROVIDER) or DEFAULT_PROVIDER
+    # CAW_PROVIDER may carry a comma-separated fallback order; take the first.
+    provider_name = provider_name.split(",")[0].strip()
     if provider_name not in _PROVIDER_REGISTRY:
         available = list(_PROVIDER_REGISTRY.keys())
         raise ValueError(f"Unknown provider {provider_name!r}. Available: {available}")
     return _PROVIDER_REGISTRY[provider_name]()
+
+
+# Global provider fallback order, used by ``provider="auto"`` / unset provider.
+_PROVIDER_ORDER: list[str] | None = None
+
+
+def set_provider_order(order: list[str] | None) -> None:
+    """Set the global provider fallback order.
+
+    Pass provider names/aliases in priority order, e.g.
+    ``set_provider_order(["claude", "codex", "opencode"])``.  Agents created
+    with ``provider="auto"`` (or with no ``provider`` and no ``CAW_PROVIDER``)
+    will select the first *installed* provider in this order and gracefully
+    fall back to the next on a first-send failure.  Pass ``None`` to clear it.
+
+    An explicit ``provider=`` argument on an Agent always overrides this.
+    """
+    global _PROVIDER_ORDER
+    _PROVIDER_ORDER = [str(p) for p in order] if order else None
+
+
+def get_provider_order() -> list[str] | None:
+    """Return the global provider fallback order, or ``None`` if unset."""
+    return list(_PROVIDER_ORDER) if _PROVIDER_ORDER else None
+
+
+def _resolve_provider_order(provider: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Resolve an Agent's ``provider`` argument into an ordered list of names.
+
+    * a list/tuple → the explicit fallback order
+    * a single name string (other than ``"auto"``) → pinned, ``[name]``
+    * ``None`` or ``"auto"`` → the global order, else ``CAW_PROVIDER`` (which
+      may be a comma-separated list), else the default provider
+    """
+    if isinstance(provider, (list, tuple)):
+        order = [str(p) for p in provider]
+    elif isinstance(provider, str) and provider != "auto":
+        order = [provider]
+    elif _PROVIDER_ORDER:
+        order = list(_PROVIDER_ORDER)
+    else:
+        env = os.environ.get(CAW_PROVIDER, "").strip()
+        order = [p.strip() for p in env.split(",") if p.strip()] if env else [DEFAULT_PROVIDER]
+    if not order:
+        order = [DEFAULT_PROVIDER]
+    for name in order:
+        if name not in _PROVIDER_REGISTRY:
+            raise ValueError(f"Unknown provider {name!r}. Available: {list(_PROVIDER_REGISTRY.keys())}")
+    return order
+
+
+def _select_installed(order: list[str]) -> tuple[int, Provider]:
+    """Return ``(index, provider)`` for the first provider in *order* whose CLI
+    is installed (a fast, no-network check).  Falls back to the first entry
+    when none are installed, so the eventual send raises a friendly error."""
+    for i, name in enumerate(order):
+        prov = _resolve_provider(name)
+        if prov.find_binary() is not None:
+            return i, prov
+    return 0, _resolve_provider(order[0])
 
 
 def _encode_resume_handle(provider: str, session_id: str, resume_key: str) -> str:
@@ -138,6 +201,7 @@ class Session:
         auto_wait: bool = True,
         metadata: dict[str, Any] | None = None,
         logger: AgentLogger | None = None,
+        fallback_build: Callable[[], ProviderSession | None] | None = None,
     ) -> None:
         self._session = provider_session
         self._store = store
@@ -150,6 +214,10 @@ class Session:
         self._async_send_lock: asyncio.Lock | None = None
         self._traj_path: str | Path | None = None
         self._logger = logger
+        # Auto-provider fallback: builds the next provider's session, or returns
+        # None when the order is exhausted.  Consulted only on the first send.
+        self._fallback_build = fallback_build
+        self._committed = False
         if logger is not None:
             self._session.set_logger(logger)
 
@@ -182,53 +250,109 @@ class Session:
         When auto-wait is enabled and the provider reports a usage limit,
         this method sleeps until the limit resets and then automatically
         resumes the conversation — transparently to the caller.
+
+        When the session was created with an auto-provider fallback order, the
+        *first* send transparently moves to the next provider if the current
+        one fails (CLI missing, auth error) or is rate-limited — the caller
+        never sees the exception.  Once a provider has produced the first turn
+        the session is committed to it (conversation context cannot be moved
+        across CLIs), so later failures propagate normally.
         """
         if self._readonly:
             raise RuntimeError("Cannot send messages on a loaded session")
         with self._send_lock:
-            current_message = message
+            if not self._committed and self._fallback_build is not None:
+                return self._first_send_with_fallback(message)
+            return self._send_with_autowait(message)
 
-            while True:
-                # Set up per-step callback so traj_path is updated in real time
-                def _save_step(blocks, _msg=current_message):
-                    traj = self.trajectory
-                    partial_turn = Turn(input=_msg, output=list(blocks))
-                    traj.turns.append(partial_turn)
-                    if self._traj_path:
-                        p = Path(self._traj_path)
-                        p.parent.mkdir(parents=True, exist_ok=True)
-                        p.write_text(json.dumps(traj.to_dict(), indent=2))
-                    if self._store:
-                        self._store._save_trajectory(traj)
+    def _raw_turn(self, message: str) -> Turn:
+        """Run one send against the current provider session (no persistence).
 
-                self._session.set_step_callback(_save_step)
-                turn = self._session.send(current_message)
-                self._session.set_step_callback(None)
+        Sets up the live-snapshot step callback and attaches subagent
+        trajectories.  Does *not* append to the store — callers persist only
+        once a turn is final (so abandoned fallback attempts leave no record).
+        """
 
-                # Attach subagent trajectories from marker files
-                _attach_subagent_trajectories(turn, self._subagent_traj_dir)
+        def _save_step(blocks, _msg=message):
+            traj = self.trajectory
+            partial_turn = Turn(input=_msg, output=list(blocks))
+            traj.turns.append(partial_turn)
+            if self._traj_path:
+                p = Path(self._traj_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(json.dumps(traj.to_dict(), indent=2))
+            if self._store:
+                self._store._save_trajectory(traj)
 
-                if self._store is not None:
-                    self._store.append_turn(turn, self.trajectory, raw_output=self._session.last_raw_output)
+        self._session.set_step_callback(_save_step)
+        try:
+            turn = self._session.send(message)
+        finally:
+            self._session.set_step_callback(None)
 
-                # Ask the provider whether this turn hit a usage limit
+        _attach_subagent_trajectories(turn, self._subagent_traj_dir)
+        return turn
+
+    def _persist_turn(self, turn: Turn) -> None:
+        if self._store is not None:
+            self._store.append_turn(turn, self.trajectory, raw_output=self._session.last_raw_output)
+
+    def _wait_for_limit(self, wait_minutes: int) -> None:
+        logger.warning("Usage limit reached. Auto-waiting %s min before resuming.", wait_minutes)
+        display = get_global_display()
+        if display:
+            display.on_metadata(auto_wait=f"sleeping {wait_minutes}min until limit resets")
+        time.sleep(wait_minutes * 60)
+
+    def _send_with_autowait(self, message: str) -> Turn:
+        """Normal send path: persist each turn, auto-wait on usage limits."""
+        current_message = message
+        while True:
+            turn = self._raw_turn(current_message)
+            self._persist_turn(turn)
+            wait = self._session.detect_usage_limit(turn) if self._auto_wait else None
+            if wait is not None:
+                self._wait_for_limit(wait)
+                current_message = _AUTO_WAIT_RESUME_MESSAGE
+                continue
+            return turn
+
+    def _swap_session(self, new_session: ProviderSession) -> None:
+        self._session = new_session
+        if self._logger is not None:
+            self._session.set_logger(self._logger)
+
+    def _first_send_with_fallback(self, message: str) -> Turn:
+        """First send across an auto-provider order: try each until one yields a
+        clean turn, then commit.  Raises only when every provider is exhausted."""
+        while True:
+            try:
+                turn = self._raw_turn(message)
+            except Exception:
+                nxt = self._fallback_build() if self._fallback_build else None
+                if nxt is None:
+                    raise  # no provider left to try
+                self._swap_session(nxt)
+                continue
+
+            # A usage-limited first turn → prefer switching providers over waiting.
+            wait = self._session.detect_usage_limit(turn)
+            if wait is not None:
+                nxt = self._fallback_build() if self._fallback_build else None
+                if nxt is not None:
+                    self._swap_session(nxt)
+                    continue
+                # Order exhausted: honour auto-wait on the last provider.
+                self._committed = True
+                self._persist_turn(turn)
                 if self._auto_wait:
-                    wait_minutes = self._session.detect_usage_limit(turn)
-                    if wait_minutes is not None:
-                        logger.warning(
-                            "Usage limit reached. Auto-waiting %s min before resuming.",
-                            wait_minutes,
-                        )
-                        display = get_global_display()
-                        if display:
-                            display.on_metadata(
-                                auto_wait=f"sleeping {wait_minutes}min until limit resets",
-                            )
-                        time.sleep(wait_minutes * 60)
-                        current_message = _AUTO_WAIT_RESUME_MESSAGE
-                        continue
-
+                    self._wait_for_limit(wait)
+                    return self._send_with_autowait(_AUTO_WAIT_RESUME_MESSAGE)
                 return turn
+
+            self._committed = True
+            self._persist_turn(turn)
+            return turn
 
     def end(self) -> Trajectory:
         """End the session and return the complete trajectory."""
@@ -296,6 +420,10 @@ class Session:
         session._readonly = True
         session._send_lock = threading.Lock()
         session._async_send_lock = None
+        session._traj_path = None
+        session._logger = None
+        session._fallback_build = None
+        session._committed = True
         session._loaded_trajectory = traj
         return session
 
@@ -342,15 +470,22 @@ class Session:
 class Agent:
     """Coding agent wrapper — unified interface across providers.
 
-    Provider resolution order:
-    1. Explicit ``provider`` argument
-    2. ``CAW_PROVIDER`` environment variable
-    3. Default provider
+    The ``provider`` argument may be:
+
+    * a single name (e.g. ``"claude"``) — pinned to that provider;
+    * a list (e.g. ``["claude", "codex", "opencode"]``) — a fallback order;
+    * ``"auto"`` (or omitted) — use the global order from
+      :func:`caw.set_provider_order`, else ``CAW_PROVIDER`` (which may be a
+      comma-separated list), else the default provider.
+
+    With a fallback order, the agent selects the first *installed* provider and,
+    on the first send, transparently moves to the next provider if that one
+    fails or is rate-limited — no exception handling needed by the caller.
     """
 
     def __init__(
         self,
-        provider: str | None = None,
+        provider: str | list[str] | None = None,
         data_dir: str | None = None,
         system_prompt: str | None = None,
         model: str | ModelTier | None = None,
@@ -404,10 +539,21 @@ class Agent:
 
     @property
     def provider(self) -> Provider:
-        """The resolved provider instance (lazily created)."""
+        """The resolved provider instance (lazily created).
+
+        For an auto/fallback order, this is the first provider in the order
+        whose CLI is installed (a fast, no-network check)."""
         if self._provider is None:
-            self._provider = _resolve_provider(self._provider_name)
+            _, self._provider = _select_installed(self._resolved_order())
         return self._provider
+
+    def _resolved_order(self) -> list[str]:
+        """The provider fallback order for this agent (see :func:`_resolve_provider_order`)."""
+        return _resolve_provider_order(self._provider_name)
+
+    def _is_pinned_single(self) -> bool:
+        """True when the agent is pinned to one explicit provider name."""
+        return isinstance(self._provider_name, str) and self._provider_name != "auto"
 
     @property
     def mcp_servers(self) -> list[MCPServer]:
@@ -590,8 +736,8 @@ class Agent:
             turn-end stats — is also emitted as a one-line summary
             through it. See :mod:`caw.logger`.
         """
-        merged = {**self._kwargs, **kwargs}
-        auto_wait, session_metadata, logger = self._pop_session_opts(merged)
+        base = {**self._kwargs, **kwargs}
+        auto_wait, session_metadata, logger = self._pop_session_opts(base)
 
         # Generate session_id early so the JSONL path is known before MCP configs
         session_id: str | None = None
@@ -600,13 +746,29 @@ class Agent:
             session_id = str(uuid_mod.uuid4())
             store = SessionStore(self._data_dir, session_id)
 
-        subagent_traj_dir, all_handles, all_mcp = self._build_tool_context(merged, store)
+        subagent_traj_dir, all_handles, all_mcp = self._start_tool_servers(store)
 
-        # Pass our session_id so the provider uses it (instead of generating its own)
-        if session_id:
-            merged["session_id"] = session_id
+        # Resolve the fallback order and select the first installed provider.
+        order = self._resolved_order()
+        sel_index, _ = _select_installed(order)
+        chosen = order[sel_index:]
+        first_choice = order[0]
 
-        provider_session = self.provider.start_session(mcp_servers=all_mcp, **merged)
+        def _build(provider_name: str) -> ProviderSession:
+            prov = _resolve_provider(provider_name)
+            merged = self._provider_session_kwargs(prov, base, is_fallback=(provider_name != first_choice))
+            if session_id:
+                merged["session_id"] = session_id
+            return prov.start_session(mcp_servers=all_mcp, **merged)
+
+        remaining = list(chosen[1:])
+
+        def _fallback_build() -> ProviderSession | None:
+            if not remaining:
+                return None
+            return _build(remaining.pop(0))
+
+        provider_session = _build(chosen[0])
 
         session = Session(
             provider_session,
@@ -616,6 +778,7 @@ class Agent:
             auto_wait=auto_wait,
             metadata=session_metadata,
             logger=logger,
+            fallback_build=_fallback_build if remaining else None,
         )
 
         if traj_path is not None:
@@ -642,19 +805,23 @@ class Agent:
         when ``data_dir`` is set (the resume key is then read from disk).
         """
         decoded = _decode_resume_handle(resume_handle)
+        resume_provider: Provider | None
         if decoded is not None:
-            provider_name = decoded["provider"]
+            resume_provider = _resolve_provider(decoded["provider"])
             session_id = decoded["session_id"]
             resume_key: str | None = decoded["resume_key"]
-            if provider_name != self.provider.name:
+            # A pinned single-provider agent must match the handle; an auto /
+            # multi-provider agent simply resumes with the handle's provider.
+            if self._is_pinned_single() and resume_provider.name != self.provider.name:
                 raise ValueError(
-                    f"Handle is for provider {provider_name!r} but this Agent uses {self.provider.name!r}."
+                    f"Handle is for provider {resume_provider.name!r} but this Agent is pinned to {self.provider.name!r}."
                 )
         else:
-            # Treat the string as a bare caw session id; the resume key must
-            # then come from the on-disk trajectory.
+            # Treat the string as a bare caw session id; the resume key (and
+            # provider) must then come from the on-disk trajectory.
             session_id = resume_handle
             resume_key = None
+            resume_provider = None
 
         # Load the persisted trajectory if a data_dir is available.
         trajectory: Trajectory | None = None
@@ -675,21 +842,26 @@ class Agent:
                     + (f" under {self._data_dir}" if self._data_dir else " (no data_dir set)")
                     + "."
                 )
-            resume_key = self.provider.resume_key_from_trajectory(trajectory)
+            if resume_provider is None:
+                resume_provider = _resolve_provider(trajectory.agent)
+            resume_key = resume_provider.resume_key_from_trajectory(trajectory)
             if not resume_key:
                 raise ValueError(f"Cannot resume {resume_handle!r}: no resume key was persisted for this session.")
 
-        merged = {**self._kwargs, **kwargs}
-        auto_wait, session_metadata, logger = self._pop_session_opts(merged)
+        assert resume_provider is not None  # set on both branches by this point
+
+        base = {**self._kwargs, **kwargs}
+        auto_wait, session_metadata, logger = self._pop_session_opts(base)
 
         if self._data_dir:
             store = SessionStore(self._data_dir, session_id, resume=True)
 
-        subagent_traj_dir, all_handles, all_mcp = self._build_tool_context(merged, store)
+        subagent_traj_dir, all_handles, all_mcp = self._start_tool_servers(store)
 
+        merged = self._provider_session_kwargs(resume_provider, base)
         # session_id is fixed by the handle/trajectory, not generated.
         merged.pop("session_id", None)
-        provider_session = self.provider.resume_session(
+        provider_session = resume_provider.resume_session(
             mcp_servers=all_mcp,
             session_id=session_id,
             resume_key=resume_key,
@@ -713,10 +885,11 @@ class Agent:
         return session
 
     def _pop_session_opts(self, merged: dict[str, Any]) -> tuple[bool, dict[str, Any], AgentLogger | None]:
-        """Strip Session-only kwargs out of *merged* and resolve a model tier.
+        """Strip Session-only kwargs out of *merged*.
 
-        Returns ``(auto_wait, session_metadata, logger)``; *merged* is left
-        holding only provider ``start_session``/``resume_session`` kwargs.
+        Returns ``(auto_wait, session_metadata, logger)``.  Model-tier and tool
+        resolution are deferred to :meth:`_provider_session_kwargs` so they can
+        be applied per provider (each maps tiers/tools differently).
         """
         auto_wait = merged.pop("auto_wait", True)
         session_metadata: dict[str, Any] = merged.pop("metadata", {})
@@ -724,29 +897,40 @@ class Agent:
         # Agent-level metadata as base, session kwargs override
         if self._metadata:
             session_metadata = {**self._metadata, **session_metadata}
-
-        # Resolve model tier to concrete model string
-        model = merged.get("model")
-        if isinstance(model, ModelTier):
-            merged["model"] = self.provider.resolve_model(model)
         return auto_wait, session_metadata, logger
 
-    def _build_tool_context(
-        self, merged: dict[str, Any], store: SessionStore | None
-    ) -> tuple[str | None, list[Any], list[MCPServer]]:
-        """Resolve tool restrictions and start tool/subagent servers.
+    def _provider_session_kwargs(
+        self, provider: Provider, base: dict[str, Any], *, is_fallback: bool = False
+    ) -> dict[str, Any]:
+        """Resolve provider-specific ``start_session`` kwargs from *base*.
 
-        Consumes ``tools`` from *merged* (applying the default), updates
-        *merged* with provider-specific tool restriction kwargs, and returns
-        ``(subagent_traj_dir, all_handles, all_mcp)``.
+        Maps a :class:`ModelTier` via the provider and translates the ``tools``
+        group into the provider's restriction kwargs.  *base* is not mutated.
+
+        A concrete ``model`` *string* is provider-specific, so it is dropped for
+        a fallback provider (``is_fallback=True``) — the fallback uses its own
+        default rather than a foreign model id.  Pass a :class:`ModelTier` for a
+        portable model selection across an auto-provider order.
         """
-        # Resolve tool restrictions: default to ALL - INTERACTION for automated pipelines
+        merged = dict(base)
+        model = merged.get("model")
+        if isinstance(model, ModelTier):
+            merged["model"] = provider.resolve_model(model)
+        elif isinstance(model, str) and is_fallback:
+            merged.pop("model", None)
         tools = merged.pop("tools", None)
         if tools is None:
             tools = ToolGroup.ALL - ToolGroup.INTERACTION
-        restrictions = self.provider.resolve_tool_restrictions(tools)
-        merged.update(restrictions)
+        merged.update(provider.resolve_tool_restrictions(tools))
+        return merged
 
+    def _start_tool_servers(self, store: SessionStore | None) -> tuple[str | None, list[Any], list[MCPServer]]:
+        """Start tool/subagent servers (provider-independent).
+
+        Returns ``(subagent_traj_dir, all_handles, all_mcp)``.  Tool *restriction*
+        resolution is provider-specific and handled in
+        :meth:`_provider_session_kwargs`.
+        """
         # Create temp dir for subagent trajectory files (if subagents exist)
         subagent_traj_dir: str | None = None
         if self._subagents:

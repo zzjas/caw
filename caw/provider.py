@@ -158,9 +158,11 @@ class Provider(ABC):
     def binary_name(self) -> str:
         """Name of the backing CLI executable (as looked up on ``PATH``).
 
-        Override in subclasses.  Used by the default :meth:`find_binary`.
+        Defaults to the provider :attr:`name`; override when the CLI binary is
+        named differently (e.g. ``claude_code`` → ``claude``).  Used by the
+        default :meth:`find_binary`.
         """
-        raise NotImplementedError(f"{self.name} provider does not declare a binary_name.")
+        return self.name
 
     def find_binary(self) -> str | None:
         """Resolve the CLI executable's path, or ``None`` if not installed.
