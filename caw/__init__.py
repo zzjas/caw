@@ -1,6 +1,6 @@
 """caw - Coding Agent Wrapper."""
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 from caw.agent import Agent, Session, get_provider_order, register_provider, set_provider_order
 from caw.auth import get_docker_flags as auth_get_docker_flags
