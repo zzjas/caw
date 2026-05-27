@@ -76,18 +76,25 @@ class TestSetupCustomDir:
         assert "claude" in manifest.agents
 
     def test_setup_default_dir_is_caw_auth(self, tmp_path: Path, monkeypatch):
-        """When dest_dir is None, setup uses ~/.caw/auth."""
+        """When no dest_dir and no CAW_AUTH_DIR, setup falls back to <home>/.caw/auth.
+
+        Clear the autouse fixture's CAW_AUTH_DIR and point HOME at a throwaway
+        dir so we exercise the real ``Path.home()/.caw/auth`` fallback without
+        touching the developer's ~/.caw. (The previous version monkeypatched
+        ``collector.AUTH_DIR``, which setup() never reads — it calls
+        ``default_auth_dir()`` directly — so it silently wrote to the real home.)
+        """
+        monkeypatch.delenv("CAW_AUTH_DIR", raising=False)
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+
         home = _make_fake_home(tmp_path)
-        caw_auth = tmp_path / "default_caw" / "auth"
-
-        # Monkeypatch AUTH_DIR so we don't touch the real filesystem
-        import caw.auth.collector as collector_mod
-
-        monkeypatch.setattr(collector_mod, "AUTH_DIR", caw_auth)
-
         result = setup(agents=["claude"], source_home=str(home))
-        assert result == caw_auth
-        assert caw_auth.exists()
+
+        assert result == Path.home() / ".caw" / "auth"
+        assert result.exists()
+        assert (result / "manifest.json").exists()
 
     def test_setup_overwrites_existing(self, tmp_path: Path):
         """Re-collecting to the same dest_dir replaces old files."""
