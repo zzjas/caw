@@ -44,6 +44,58 @@ def viewer(
         server.stop()
 
 
+@app.command()
+def doctor(
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Round-trip a probe per provider to check it responds / isn't rate-limited (costs a request each).",
+    ),
+):
+    """Show health/availability signals for each provider's CLI."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from caw.health import check_providers
+
+    healths = check_providers(live=live)
+    console = Console()
+
+    table = Table(title="caw doctor", show_lines=True)
+    table.add_column("Provider", style="bold")
+    table.add_column("Installed")
+    table.add_column("Binary", style="dim")
+    table.add_column("Auth")
+    if live:
+        table.add_column("Probe")
+
+    for h in healths:
+        installed = "[green]✓[/green]" if h.installed else "[red]✗[/red]"
+        if h.auth is None:
+            auth = "[dim]unknown[/dim]"
+        elif h.auth.token_expired:
+            auth = f"[red]{h.auth.detail}[/red]"
+        elif h.auth.present:
+            auth = f"[green]{h.auth.detail}[/green]"
+        else:
+            auth = f"[yellow]{h.auth.detail}[/yellow]"
+
+        row = [h.provider, installed, h.binary_path or "—", auth]
+        if live:
+            if not h.probed:
+                probe = "[dim]skipped[/dim]"
+            elif h.error:
+                probe = f"[red]error: {h.error}[/red]"
+            elif h.rate_limited:
+                probe = f"[yellow]rate-limited (~{h.wait_minutes}m)[/yellow]"
+            else:
+                probe = "[green]responds[/green]"
+            row.append(probe)
+        table.add_row(*row)
+
+    console.print(table)
+
+
 @app.command("traj")
 def traj(
     path: Path = typer.Argument(

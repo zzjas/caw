@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from caw.logger import AgentLogger
 from caw.models import InteractiveResult, MCPServer, ModelTier, ToolGroup, Trajectory, Turn
+
+if TYPE_CHECKING:
+    from caw.health import AuthSignal, ProviderHealth
 
 
 class ProviderSession(ABC):
@@ -146,6 +149,66 @@ class Provider(ABC):
         Override in subclasses to disable tools and minimise side-effects.
         """
         return {}
+
+    # ------------------------------------------------------------------
+    # Health / availability
+    # ------------------------------------------------------------------
+
+    @property
+    def binary_name(self) -> str:
+        """Name of the backing CLI executable (as looked up on ``PATH``).
+
+        Override in subclasses.  Used by the default :meth:`find_binary`.
+        """
+        raise NotImplementedError(f"{self.name} provider does not declare a binary_name.")
+
+    def find_binary(self) -> str | None:
+        """Resolve the CLI executable's path, or ``None`` if not installed.
+
+        Default looks up :attr:`binary_name` on ``PATH``.  Override to add
+        provider-specific fallback locations.
+        """
+        import shutil
+
+        return shutil.which(self.binary_name)
+
+    def check_auth(self) -> "AuthSignal | None":  # noqa: F821 (forward ref)
+        """Best-effort, non-authoritative introspection of credentials.
+
+        Returns an :class:`~caw.health.AuthSignal`, or ``None`` when the
+        provider cannot introspect its credentials at all.  Override in
+        subclasses; the default returns ``None`` (unknown).
+        """
+        return None
+
+    def check_health(self, *, live: bool = False, model: str | None = None) -> "ProviderHealth":  # noqa: F821
+        """Report raw health signals for this provider.
+
+        Fast by default: checks whether the CLI is installed and introspects
+        credentials.  When ``live`` is True, additionally runs the
+        :meth:`check_limit` probe (one request) to confirm the provider
+        responds and whether it is currently rate-limited.
+
+        Forms no verdict on "availability" — see :class:`caw.health.ProviderHealth`.
+        """
+        from caw.health import ProviderHealth
+
+        binary = self.find_binary()
+        health = ProviderHealth(
+            provider=self.name,
+            installed=binary is not None,
+            binary_path=binary,
+            auth=self.check_auth(),
+        )
+        if live and health.installed:
+            health.probed = True
+            try:
+                wait = self.check_limit(model=model)
+                health.rate_limited = wait is not None
+                health.wait_minutes = wait
+            except Exception as exc:  # noqa: BLE001 — surface as a signal, not a raise
+                health.error = str(exc)
+        return health
 
     def start_interactive(
         self, initial_prompt: str, mcp_servers: list[MCPServer], capture_bytes: int = 0, **kwargs: Any

@@ -13,7 +13,7 @@ import threading
 import time
 import uuid as uuid_mod
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from caw.display import get_global_display
 from caw.logger import AgentLogger
@@ -22,6 +22,9 @@ from caw.provider import Provider, ProviderSession
 from caw.storage import SessionStore
 from caw.toolkit import ToolKit
 from caw.mcp import create_stateless_tool_server
+
+if TYPE_CHECKING:
+    from caw.health import ProviderHealth
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +493,19 @@ class Agent:
         if isinstance(model, ModelTier):
             model = self.provider.resolve_model(model)
         return self.provider.check_limit(model=model)
+
+    def check_health(self, live: bool = False) -> "ProviderHealth":
+        """Report raw health signals for this agent's provider.
+
+        Fast by default (CLI installed + credential introspection, no token
+        cost).  Pass ``live=True`` to additionally probe whether the provider
+        responds and is currently rate-limited.  See
+        :class:`caw.health.ProviderHealth`.
+        """
+        model = self._kwargs.get("model")
+        if isinstance(model, ModelTier):
+            model = self.provider.resolve_model(model)
+        return self.provider.check_health(live=live, model=model)
 
     def interactive(self, initial_prompt: str, capture_bytes: int = 0, **kwargs: Any) -> InteractiveResult:
         """Launch the provider binary interactively with an initial prompt.

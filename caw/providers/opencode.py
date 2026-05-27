@@ -86,15 +86,27 @@ _OPENCODE_FALLBACKS = [
 ]
 
 
-def _find_opencode_binary() -> str:
-    """Locate the opencode CLI; prefer PATH, fall back to standard install dirs."""
+def _resolve_opencode_path() -> str | None:
+    """Resolve the opencode CLI path; prefer PATH, fall back to install dirs.
+
+    Returns ``None`` when not found anywhere.
+    """
     found = shutil.which("opencode")
     if found:
         return found
     for path in _OPENCODE_FALLBACKS:
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
-    return "opencode"  # let subprocess raise FileNotFoundError → friendly RuntimeError
+    return None
+
+
+def _find_opencode_binary() -> str:
+    """Locate the opencode CLI for launching a subprocess.
+
+    Falls back to the bare name ``"opencode"`` when not found, so the
+    subprocess raises ``FileNotFoundError`` → friendly RuntimeError.
+    """
+    return _resolve_opencode_path() or "opencode"
 
 
 # -- Usage-limit detection ----------------------------------------------------
@@ -554,6 +566,18 @@ class OpencodeProvider(Provider):
     @property
     def name(self) -> str:
         return "opencode"
+
+    @property
+    def binary_name(self) -> str:
+        return "opencode"
+
+    def find_binary(self) -> str | None:
+        return _resolve_opencode_path()
+
+    def check_auth(self):
+        from caw.health import opencode_auth_signal
+
+        return opencode_auth_signal()
 
     def resolve_model(self, tier: ModelTier) -> str:
         return _MODEL_TIER_MAP[tier]

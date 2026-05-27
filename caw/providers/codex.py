@@ -557,6 +557,15 @@ class CodexProvider(Provider):
     def name(self) -> str:
         return "codex"
 
+    @property
+    def binary_name(self) -> str:
+        return "codex"
+
+    def check_auth(self):
+        from caw.health import codex_auth_signal
+
+        return codex_auth_signal()
+
     def resolve_model(self, tier: ModelTier) -> str:
         return _MODEL_TIER_MAP[tier]
 

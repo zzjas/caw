@@ -8,6 +8,7 @@ from caw.auth import get_status as auth_get_status
 from caw.auth import setup as auth_setup
 from caw.display import Display, DisplayMode, get_global_display, set_global_display
 from caw.faststats import FastStats
+from caw.health import AuthSignal, ProviderHealth, check_providers
 from caw.logger import AgentLogger
 from caw.mcp import (
     MCPServerHandle,
@@ -52,6 +53,9 @@ __all__ = [
     "Agent",
     "AgentLogger",
     "AgentSpec",
+    "AuthSignal",
+    "ProviderHealth",
+    "check_providers",
     "ClaudeCodeProvider",
     "CodexProvider",
     "OpencodeProvider",

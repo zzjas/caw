@@ -515,6 +515,15 @@ class ClaudeCodeProvider(Provider):
     def name(self) -> str:
         return "claude_code"
 
+    @property
+    def binary_name(self) -> str:
+        return "claude"
+
+    def check_auth(self):
+        from caw.health import claude_auth_signal
+
+        return claude_auth_signal()
+
     def resolve_model(self, tier: ModelTier) -> str:
         return _MODEL_TIER_MAP[tier]
 
