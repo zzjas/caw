@@ -10,7 +10,7 @@ from typing import Any, Union
 class ModelTier(enum.Enum):
     """Abstract model selection tiers.
 
-    Each provider maps these to concrete model identifiers::
+    Each provider maps these to concrete model identifiers:
 
         agent = Agent(model=ModelTier.STRONGEST)  # provider picks its best model
         agent = Agent(model=ModelTier.FAST)        # provider picks its fast model
@@ -24,7 +24,7 @@ class ModelTier(enum.Enum):
 class ToolGroup(enum.Flag):
     """Abstract tool permission groups.
 
-    Combine with ``|`` (union) and ``-`` (subtract) to build permission sets::
+    Combine with ``|`` (union) and ``-`` (subtract) to build permission sets:
 
         ToolGroup.READER | ToolGroup.EXEC          # read + execute only
         ToolGroup.ALL - ToolGroup.WRITER            # everything except writes

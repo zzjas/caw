@@ -431,10 +431,10 @@ def create_stateless_tool_server(
     server_id: str | None = None,
     display_name: str = "stateless_tools",
 ) -> MCPServerHandle:
-    """Bundle plain functions into a single :class:`MCPServerHandle`.
+    """Bundle plain functions into a single `MCPServerHandle`.
 
     Each function is registered as an MCP tool.  Functions may optionally be
-    decorated with :func:`mcp_tool` or :func:`~caw.toolkit.tool` to supply
+    decorated with `mcp_tool` or `tool` to supply
     metadata; bare functions are registered using their name and docstring.
     """
     sid = server_id or f"general_{uuid_mod.uuid4().hex[:6]}"

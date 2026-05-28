@@ -1,0 +1,154 @@
+site_name: caw
+site_description: One interface for every coding agent — a Python library and CLI for orchestrating Claude Code, Codex, and opencode.
+site_url: https://zzjas.github.io/caw/
+repo_url: https://github.com/zzjas/caw
+repo_name: zzjas/caw
+edit_uri: edit/main/docs/
+copyright: Apache-2.0
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Concepts: getting-started/concepts.md
+  - Guides:
+      - Providers: guides/providers.md
+      - Auto-provider mode: guides/auto-provider.md
+      - Models & tiers: guides/models-and-tiers.md
+      - Sessions: guides/sessions.md
+      - Resuming sessions: guides/resuming.md
+      - MCP servers: guides/mcp-servers.md
+      - ToolKit & tools: guides/toolkit.md
+      - Subagents: guides/subagents.md
+      - Provider health: guides/health.md
+      - Persistence: guides/persistence.md
+      - Display & logging: guides/display-and-logging.md
+      - Trajectory viewer: guides/trajectory-viewer.md
+      - Docker credentials: guides/docker-credentials.md
+  - Reference:
+      - API:
+          - Agent & Session: reference/api/agent.md
+          - Data models: reference/api/models.md
+          - Providers: reference/api/providers.md
+          - Health: reference/api/health.md
+          - Tools & MCP: reference/api/toolkit-mcp.md
+          - Storage: reference/api/storage.md
+          - Display & logging: reference/api/display.md
+          - Trajectory viewer: reference/api/viewer.md
+          - Auth: reference/api/auth.md
+      - CLI: reference/cli.md
+      - Environment variables: reference/environment.md
+  - About:
+      - Changelog: about/changelog.md
+      - License: about/license.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            docstring_section_style: table
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            members_order: source
+            filters: ["!^_"]
+            heading_level: 2
+  - mkdocs-typer2:
+      pretty: true
+  - llmstxt:
+      full_output: llms-full.txt
+      markdown_description: >-
+        caw (Coding Agent Wrapper) is a Python library and CLI that wraps multiple
+        coding-agent CLIs (Claude Code, Codex, opencode) behind one Agent / Session
+        API, with auto-provider fallback, MCP tool servers, subagents, structured
+        trajectories, and Docker credential management.
+      sections:
+        Getting started:
+          - index.md
+          - getting-started/*.md
+        Guides:
+          - guides/*.md
+        Reference:
+          - reference/environment.md
+          - reference/cli.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - mkdocs-click
+  - md_in_html
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.snippets:
+      base_path: [.]
+      check_paths: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/zzjas/caw
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/coding-agent-wrapper/

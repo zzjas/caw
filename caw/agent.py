@@ -147,7 +147,7 @@ def _encode_resume_handle(provider: str, session_id: str, resume_key: str) -> st
 
 
 def _decode_resume_handle(handle: str) -> dict[str, Any] | None:
-    """Parse a JSON handle produced by :func:`_encode_resume_handle`.
+    """Parse a JSON handle produced by `_encode_resume_handle`.
 
     Returns the payload dict, or ``None`` if *handle* is not a self-contained
     handle (e.g. a bare session id), so callers can fall back to disk lookup.
@@ -222,16 +222,16 @@ class Session:
             self._session.set_logger(logger)
 
     async def send_async(self, message: str) -> Turn:
-        """Async version of :meth:`send` — runs in a thread.
+        """Async version of `send` — runs in a thread.
 
         Messages are processed in FIFO order: if multiple ``send_async``
         calls overlap, each waits for the previous one to finish before
-        starting.  This lets you fire-and-forget multiple messages::
+        starting.  This lets you fire-and-forget multiple messages:
 
             tasks = [asyncio.create_task(session.send_async(m)) for m in msgs]
             turns = await asyncio.gather(*tasks)  # executed in order
 
-        You can also do async work while a send is in progress::
+        You can also do async work while a send is in progress:
 
             task = asyncio.create_task(session.send_async(prompt))
             while not task.done():
@@ -433,10 +433,10 @@ class Session:
         process.
 
         Store it anywhere (a database, a file, …) and pass it to
-        :meth:`Agent.resume_session`.  The handle is self-contained: it carries
+        `Agent.resume_session`.  The handle is self-contained: it carries
         the backend resume key, so resuming works even without the original
         ``data_dir`` (you just won't get the prior trajectory restored).  If
-        the resuming :class:`Agent` *does* share the same ``data_dir``, the
+        the resuming `Agent` *does* share the same ``data_dir``, the
         full history is restored and new turns are appended.
 
         Raises if the backend has not yet assigned a resume key — send at least
@@ -475,7 +475,7 @@ class Agent:
     * a single name (e.g. ``"claude"``) — pinned to that provider;
     * a list (e.g. ``["claude", "codex", "opencode"]``) — a fallback order;
     * ``"auto"`` (or omitted) — use the global order from
-      :func:`caw.set_provider_order`, else ``CAW_PROVIDER`` (which may be a
+      `caw.set_provider_order`, else ``CAW_PROVIDER`` (which may be a
       comma-separated list), else the default provider.
 
     With a fallback order, the agent selects the first *installed* provider and,
@@ -548,7 +548,7 @@ class Agent:
         return self._provider
 
     def _resolved_order(self) -> list[str]:
-        """The provider fallback order for this agent (see :func:`_resolve_provider_order`)."""
+        """The provider fallback order for this agent (see `_resolve_provider_order`)."""
         return _resolve_provider_order(self._provider_name)
 
     def _is_pinned_single(self) -> bool:
@@ -572,7 +572,7 @@ class Agent:
     def add_tool_server(self, handle: Any) -> None:
         """Register a custom HTTP tool server (MCPServerHandle or ToolKit).
 
-        If *handle* is a :class:`~caw.toolkit.ToolKit` instance, ``as_server()``
+        If *handle* is a `ToolKit` instance, ``as_server()``
         is called automatically.  The handle's lifecycle (start/stop) is managed
         by the session.
         """
@@ -646,7 +646,7 @@ class Agent:
         Fast by default (CLI installed + credential introspection, no token
         cost).  Pass ``live=True`` to additionally probe whether the provider
         responds and is currently rate-limited.  See
-        :class:`caw.health.ProviderHealth`.
+        `caw.health.ProviderHealth`.
         """
         model = self._kwargs.get("model")
         if isinstance(model, ModelTier):
@@ -660,16 +660,14 @@ class Agent:
         A copy of stdout is captured via a pty.  MCP tool servers are
         started before launch and stopped after the process exits.
 
-        Parameters
-        ----------
-        initial_prompt:
-            The first message sent to the agent.
-        capture_bytes:
-            Maximum bytes of terminal output to keep (tail).
-            ``0`` (default) means capture everything.
+        Args:
+            initial_prompt: The first message sent to the agent.
+            capture_bytes: Maximum bytes of terminal output to keep (tail).
+                ``0`` (default) means capture everything.
 
-        Returns an :class:`InteractiveResult` with the exit code and
-        captured terminal output.
+        Returns:
+            An ``InteractiveResult`` with the exit code and captured terminal
+            output.
         """
         merged = {**self._kwargs, **kwargs}
 
@@ -712,7 +710,7 @@ class Agent:
         """Send a single message and return the complete trajectory.
 
         Convenience wrapper for simple use cases where you don't need
-        to maintain a multi-turn session::
+        to maintain a multi-turn session:
 
             traj = agent.completion("Explain this code")
             print(traj.result)
@@ -724,17 +722,15 @@ class Agent:
     def start_session(self, traj_path: str | Path | None = None, **kwargs: Any) -> Session:
         """Start a new interactive session with the agent.
 
-        Parameters
-        ----------
-        traj_path:
-            If set, the trajectory is saved to this path after each
-            step and when :meth:`Session.end` is called.
-        logger:
-            Optional generic logger (any object with ``info``/``warn``/
-            ``error`` string methods). If set, every major event — user
-            message, tool call, tool result, assistant text, thinking,
-            turn-end stats — is also emitted as a one-line summary
-            through it. See :mod:`caw.logger`.
+        Args:
+            traj_path: If set, the trajectory is saved to this path after each
+                step and when ``Session.end`` is called.
+
+        Additional keyword arguments are forwarded to the session. Passing a
+        ``logger`` (any object with ``info``/``warn``/``error`` string methods)
+        makes every major event — user message, tool call, tool result,
+        assistant text, thinking, turn-end stats — also emit a one-line summary
+        through it, in addition to the console ``Display``. See ``caw.logger``.
         """
         base = {**self._kwargs, **kwargs}
         auto_wait, session_metadata, logger = self._pop_session_opts(base)
@@ -790,9 +786,9 @@ class Agent:
         return session
 
     def resume_session(self, resume_handle: str, **kwargs: Any) -> Session:
-        """Resume a session from a handle produced by :attr:`Session.resume_handle`.
+        """Resume a session from a handle produced by `Session.resume_handle`.
 
-        Returns a live :class:`Session` whose next :meth:`Session.send`
+        Returns a live `Session` whose next `Session.send`
         continues the original conversation.
 
         - **Without ``data_dir`` (or if the session isn't on disk):** the backend
@@ -888,7 +884,7 @@ class Agent:
         """Strip Session-only kwargs out of *merged*.
 
         Returns ``(auto_wait, session_metadata, logger)``.  Model-tier and tool
-        resolution are deferred to :meth:`_provider_session_kwargs` so they can
+        resolution are deferred to `_provider_session_kwargs` so they can
         be applied per provider (each maps tiers/tools differently).
         """
         auto_wait = merged.pop("auto_wait", True)
@@ -904,12 +900,12 @@ class Agent:
     ) -> dict[str, Any]:
         """Resolve provider-specific ``start_session`` kwargs from *base*.
 
-        Maps a :class:`ModelTier` via the provider and translates the ``tools``
+        Maps a `ModelTier` via the provider and translates the ``tools``
         group into the provider's restriction kwargs.  *base* is not mutated.
 
         A concrete ``model`` *string* is provider-specific, so it is dropped for
         a fallback provider (``is_fallback=True``) — the fallback uses its own
-        default rather than a foreign model id.  Pass a :class:`ModelTier` for a
+        default rather than a foreign model id.  Pass a `ModelTier` for a
         portable model selection across an auto-provider order.
         """
         merged = dict(base)
@@ -929,7 +925,7 @@ class Agent:
 
         Returns ``(subagent_traj_dir, all_handles, all_mcp)``.  Tool *restriction*
         resolution is provider-specific and handled in
-        :meth:`_provider_session_kwargs`.
+        `_provider_session_kwargs`.
         """
         # Create temp dir for subagent trajectory files (if subagents exist)
         subagent_traj_dir: str | None = None

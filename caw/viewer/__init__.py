@@ -3,7 +3,7 @@
 Provides a simple HTTP server that serves a self-contained trajectory viewer.
 The viewer loads trajectory JSON files by absolute path.
 
-Usage::
+Usage:
 
     from caw.viewer import start_viewer_server
 
@@ -136,7 +136,7 @@ def start_viewer_server(
         port: Port to bind to.  If *None*, a free port is chosen automatically.
 
     Returns:
-        A :class:`ViewerServer` handle.
+        A `ViewerServer` handle.
     """
     host = host or "localhost"
     port = port or _find_free_port()

@@ -1,6 +1,6 @@
 """ToolKit base class and @tool decorator for declarative MCP tool servers.
 
-Usage::
+Usage:
 
     from caw import Agent, ToolKit, tool
 
@@ -66,7 +66,7 @@ class ToolKit:
     """Base class for declarative MCP tool servers.
 
     Subclass, decorate methods with ``@tool``, call ``as_server()``
-    to get an :class:`MCPServerHandle`.
+    to get an `MCPServerHandle`.
     """
 
     _server_name: ClassVar[str] = ""
@@ -87,7 +87,7 @@ class ToolKit:
             cls._thread_safe = True
 
     def as_server(self, server_id: str | None = None) -> MCPServerHandle:
-        """Build and return an :class:`MCPServerHandle` with all ``@tool`` methods registered."""
+        """Build and return an `MCPServerHandle` with all ``@tool`` methods registered."""
         cls = type(self)
         if cls._thread_safe and not hasattr(self, "_toolkit_lock"):
             self._toolkit_lock = threading.Lock()

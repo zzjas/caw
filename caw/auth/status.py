@@ -159,7 +159,7 @@ def get_docker_flags(auth_dir: str | Path | None = None) -> str:
         auth_dir: Custom auth directory. Defaults to ~/.caw/auth/.
 
     Returns:
-        A space-separated string of Docker ``-v`` flags, e.g.::
+        A space-separated string of Docker ``-v`` flags, e.g.:
 
             -v /.../.caw/auth:/tmp/caw_auth:rw \
             -v /.../.claude/.credentials.json:/tmp/caw_auth/claude/credentials.json:rw

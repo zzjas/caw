@@ -9,7 +9,7 @@ Two depths of check:
 * **fast** (default): is the CLI binary installed, and what can we cheaply
   introspect about credentials?  No network, no token cost.
 * **live** (``live=True``): additionally round-trips a minimal prompt via
-  :meth:`Provider.check_limit` to confirm the provider actually responds and
+  `Provider.check_limit` to confirm the provider actually responds and
   whether it is currently rate-limited.  Costs one probe request.
 """
 
@@ -82,9 +82,9 @@ def _auth_signal(
     *,
     claude_expiry: bool = False,
 ) -> AuthSignal:
-    """Build an :class:`AuthSignal` for *agent_name*.
+    """Build an `AuthSignal` for *agent_name*.
 
-    Reuses the credential-location knowledge in :mod:`caw.auth.providers`
+    Reuses the credential-location knowledge in `caw.auth.providers`
     (``validate`` for presence, ``describe`` for a summary) and additionally
     treats any set ``env_vars`` as a credential source.
     """
@@ -144,7 +144,7 @@ def check_providers(
     live: bool = False,
     model: str | None = None,
 ) -> list[ProviderHealth]:
-    """Return :class:`ProviderHealth` for each registered provider.
+    """Return `ProviderHealth` for each registered provider.
 
     Args:
         names: Provider names/aliases to check, or ``None`` for every
@@ -154,7 +154,7 @@ def check_providers(
         model: Optional model string passed through to the live probe.
 
     Returns:
-        One :class:`ProviderHealth` per distinct provider, in the order given
+        One `ProviderHealth` per distinct provider, in the order given
         (or registration order when ``names`` is None).
     """
     from caw.agent import _PROVIDER_REGISTRY

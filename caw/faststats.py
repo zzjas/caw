@@ -9,7 +9,7 @@ list views) only want a handful of header / footer fields:
 
 ``FastStats`` extracts these by reading only the head and tail of the file
 (~8 KB total) and parsing the predictable indent=2 layout that
-:class:`caw.storage.SessionStore` writes. The fast path is roughly 3x
+`caw.storage.SessionStore` writes. The fast path is roughly 3x
 quicker than ``json.loads`` on a directory of small trajectories and 25x+
 faster on multi-MB files. When the fast path fails (non-CAW layout, hand
 edited file, etc.) it falls back to a full JSON parse.
@@ -68,7 +68,7 @@ class FastStats:
     The class is intentionally narrow: it exposes only the fields that
     consumers ask for repeatedly without paying for a full trajectory parse.
     For everything else (turns, tool calls, content blocks) load the file
-    via :meth:`caw.agent.Session.load_trajectory` instead.
+    via `caw.agent.Session.load_trajectory` instead.
 
     All ``cost_usd`` / token values come from the trajectory's
     ``total_usage`` (recursive across subagents) when present, falling back
@@ -109,7 +109,7 @@ class FastStats:
 
     @classmethod
     def from_trajectory(cls, trajectory: Trajectory, *, path: str | Path | None = None) -> FastStats:
-        """Build :class:`FastStats` from an in-memory :class:`Trajectory`."""
+        """Build `FastStats` from an in-memory `Trajectory`."""
         usage = trajectory.total_usage
         return cls(
             path=Path(path) if path is not None else None,
@@ -188,7 +188,7 @@ class FastStats:
         patterns: Iterable[str] = ("**/trajectory.json", "**/*.traj.json"),
         skip_parts: Iterable[str] = (),
     ) -> Iterator[FastStats]:
-        """Yield :class:`FastStats` for every trajectory file under *directory*.
+        """Yield `FastStats` for every trajectory file under *directory*.
 
         ``patterns`` is a list of globs (relative to *directory*) to scan;
         the default catches both the canonical CAW layout
@@ -226,7 +226,7 @@ class FastStats:
     ) -> float:
         """Sum ``cost_usd`` across every trajectory under *directory*.
 
-        Extra keyword arguments are forwarded to :meth:`iter_directory`.
+        Extra keyword arguments are forwarded to `iter_directory`.
         """
         return sum(s.cost_usd for s in cls.iter_directory(directory, **kwargs))
 

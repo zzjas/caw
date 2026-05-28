@@ -111,7 +111,7 @@ class JsonlWriter:
 class SessionStore:
     """Persists session data to a directory on disk.
 
-    Layout::
+    Layout:
 
         <data_dir>/sessions/<session_id>/
             traj.jsonl          # incremental append-only event log

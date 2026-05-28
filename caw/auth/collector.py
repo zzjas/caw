@@ -238,7 +238,7 @@ def setup(
 
     Host credential files are read but not modified. At container run time
     they are bind-mounted into the same paths under the mount point — see
-    :func:`caw.auth.get_docker_flags`.
+    `caw.auth.get_docker_flags`.
 
     Args:
         agents: List of agent names, or None / ["all"] for all agents.

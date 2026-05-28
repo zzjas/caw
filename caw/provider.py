@@ -53,14 +53,14 @@ class ProviderSession(ABC):
         This is whatever the backend CLI accepts to continue an existing
         session (claude's session id, codex's thread id, opencode's session
         id).  ``None`` until the backend has assigned one — typically after the
-        first :meth:`send`.
+        first `send`.
         """
         return None
 
     def _restore_from_trajectory(self, trajectory: Trajectory) -> None:
         """Re-seed a freshly built session with a prior trajectory's state.
 
-        Used by :meth:`Provider.resume_session` so a session reconstructed in a
+        Used by `Provider.resume_session` so a session reconstructed in a
         new process carries the original history, usage totals, and creation
         time forward.  All concrete provider sessions share these attribute
         names; resume-specific keys (thread id, etc.) are restored by the
@@ -97,7 +97,7 @@ class Provider(ABC):
         ...
 
     def resolve_model(self, tier: ModelTier) -> str:
-        """Translate a :class:`ModelTier` into a concrete model identifier.
+        """Translate a `ModelTier` into a concrete model identifier.
 
         Each provider must override this to map abstract tiers (e.g.
         ``ModelTier.STRONGEST``) to the actual model string it supports.
@@ -158,16 +158,16 @@ class Provider(ABC):
     def binary_name(self) -> str:
         """Name of the backing CLI executable (as looked up on ``PATH``).
 
-        Defaults to the provider :attr:`name`; override when the CLI binary is
+        Defaults to the provider `name`; override when the CLI binary is
         named differently (e.g. ``claude_code`` → ``claude``).  Used by the
-        default :meth:`find_binary`.
+        default `find_binary`.
         """
         return self.name
 
     def find_binary(self) -> str | None:
         """Resolve the CLI executable's path, or ``None`` if not installed.
 
-        Default looks up :attr:`binary_name` on ``PATH``.  Override to add
+        Default looks up `binary_name` on ``PATH``.  Override to add
         provider-specific fallback locations.
         """
         import shutil
@@ -177,7 +177,7 @@ class Provider(ABC):
     def check_auth(self) -> "AuthSignal | None":  # noqa: F821 (forward ref)
         """Best-effort, non-authoritative introspection of credentials.
 
-        Returns an :class:`~caw.health.AuthSignal`, or ``None`` when the
+        Returns an `AuthSignal`, or ``None`` when the
         provider cannot introspect its credentials at all.  Override in
         subclasses; the default returns ``None`` (unknown).
         """
@@ -188,10 +188,10 @@ class Provider(ABC):
 
         Fast by default: checks whether the CLI is installed and introspects
         credentials.  When ``live`` is True, additionally runs the
-        :meth:`check_limit` probe (one request) to confirm the provider
+        `check_limit` probe (one request) to confirm the provider
         responds and whether it is currently rate-limited.
 
-        Forms no verdict on "availability" — see :class:`caw.health.ProviderHealth`.
+        Forms no verdict on "availability" — see `caw.health.ProviderHealth`.
         """
         from caw.health import ProviderHealth
 
@@ -221,7 +221,7 @@ class Provider(ABC):
         inherited so the user interacts with the agent directly.
         A copy of stdout is captured via a pty.
 
-        Returns an :class:`InteractiveResult` with the exit code and
+        Returns an `InteractiveResult` with the exit code and
         captured output.
         """
         raise NotImplementedError(f"{self.name} provider does not support interactive mode.")
@@ -234,7 +234,7 @@ class Provider(ABC):
     def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
         """Extract the resume key from a persisted *trajectory*.
 
-        Mirrors :attr:`ProviderSession.resume_key` but reads from a stored
+        Mirrors `ProviderSession.resume_key` but reads from a stored
         trajectory rather than a live session.  Returns ``None`` if the
         trajectory predates resume support or was never sent to.
         """
@@ -252,12 +252,12 @@ class Provider(ABC):
         """Rebuild a live session ready to continue an existing conversation.
 
         ``resume_key`` is the provider-side key the backend CLI needs to resume
-        (see :attr:`ProviderSession.resume_key`); ``session_id`` is caw's own
+        (see `ProviderSession.resume_key`); ``session_id`` is caw's own
         bookkeeping id (the on-disk directory name).  The next
-        :meth:`ProviderSession.send` must resume rather than start fresh.
+        `ProviderSession.send` must resume rather than start fresh.
 
         When ``trajectory`` is given, the prior history/usage is carried forward
-        via :meth:`ProviderSession._restore_from_trajectory`.  When it is
+        via `ProviderSession._restore_from_trajectory`.  When it is
         ``None`` (e.g. resuming without a ``data_dir``), the backend session is
         still resumed but caw's trajectory starts empty.
         """

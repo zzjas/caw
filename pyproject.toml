@@ -31,10 +31,18 @@ dev = [
     "mypy",
     "prek",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+    "mkdocs-typer2>=0.1.4",
+    "mkdocs-click>=0.8",
+    "mkdocs-llmstxt>=0.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/zzjas/caw"
 Repository = "https://github.com/zzjas/caw"
+Documentation = "https://zzjas.github.io/caw/"
 
 [project.scripts]
 caw = "caw.cli:main"
