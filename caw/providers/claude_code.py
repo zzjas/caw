@@ -42,7 +42,7 @@ from caw.provider import Provider, ProviderSession
 # -- Tool group → Claude Code tool name mapping --------------------------------
 
 _MODEL_TIER_MAP: dict[ModelTier, str] = {
-    ModelTier.STRONGEST: os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6"),
+    ModelTier.STRONGEST: os.environ.get("ANTHROPIC_MODEL", "opus"),
     ModelTier.FAST: os.environ.get("ANTHROPIC_SMALL_FAST_MODEL", "claude-haiku-4-5-20251001"),
 }
 

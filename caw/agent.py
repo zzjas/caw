@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # the Agent() constructor or method calls.
 #
 #   CAW_PROVIDER  — Provider backend ("claude_code", "codex", …)
-#   CAW_MODEL     — Model name passed to the provider (e.g. "gpt-5.2-codex")
+#   CAW_MODEL     — Model name passed to the provider (e.g. "opus", "gpt-5.5")
 #   CAW_EFFORT    — Reasoning effort level (e.g. "high", "medium", "low")
 #   CAW_AUTOWAIT  — Auto-wait on usage limit ("1"=on, "0"/"false"=off; default on)
 # ---------------------------------------------------------------------------

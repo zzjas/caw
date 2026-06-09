@@ -13,7 +13,7 @@ from caw.providers.codex import CodexProvider
 class TestModelTierResolution:
     def test_claude_code_strongest(self):
         provider = ClaudeCodeProvider()
-        assert provider.resolve_model(ModelTier.STRONGEST) == "claude-opus-4-6"
+        assert provider.resolve_model(ModelTier.STRONGEST) == "opus"
 
     def test_claude_code_fast(self):
         provider = ClaudeCodeProvider()
@@ -21,7 +21,7 @@ class TestModelTierResolution:
 
     def test_codex_strongest(self):
         provider = CodexProvider()
-        assert provider.resolve_model(ModelTier.STRONGEST) == "gpt-5.3-codex"
+        assert provider.resolve_model(ModelTier.STRONGEST) is None
 
     def test_codex_fast(self):
         provider = CodexProvider()
@@ -51,7 +51,18 @@ class TestModelTierResolution:
         with patch.object(ClaudeCodeProvider, "start_session", return_value=mock_session) as mock_start:
             agent.start_session()
             call_kwargs = mock_start.call_args
-            assert call_kwargs.kwargs.get("model") == "claude-opus-4-6"
+            assert call_kwargs.kwargs.get("model") == "opus"
+
+    def test_agent_leaves_codex_strongest_to_provider_default(self):
+        agent = Agent(provider="codex", model=ModelTier.STRONGEST, data_dir=None)
+
+        mock_session = MagicMock()
+        mock_session.trajectory = Trajectory(agent="codex")
+
+        with patch.object(CodexProvider, "start_session", return_value=mock_session) as mock_start:
+            agent.start_session()
+            call_kwargs = mock_start.call_args
+            assert call_kwargs.kwargs.get("model") is None
 
     def test_agent_passes_string_model_unchanged(self):
         agent = Agent(provider="claude_code", model="my-custom-model", data_dir=None)

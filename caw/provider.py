@@ -96,11 +96,12 @@ class Provider(ABC):
         """Provider identifier (e.g. 'claude_code', 'codex')."""
         ...
 
-    def resolve_model(self, tier: ModelTier) -> str:
-        """Translate a `ModelTier` into a concrete model identifier.
+    def resolve_model(self, tier: ModelTier) -> str | None:
+        """Translate a `ModelTier` into a concrete model identifier, if needed.
 
         Each provider must override this to map abstract tiers (e.g.
-        ``ModelTier.STRONGEST``) to the actual model string it supports.
+        ``ModelTier.STRONGEST``) to the actual model string it supports. Return
+        ``None`` when the provider's own default/config should select the tier.
         """
         raise NotImplementedError(
             f"{self.name} provider does not implement resolve_model(); "

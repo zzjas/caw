@@ -7,7 +7,7 @@ the `Agent` constructor or a method call.
 | Variable | Purpose | Example |
 |----------|---------|---------|
 | `CAW_PROVIDER` | Default provider, or a comma-separated [fallback order](../guides/auto-provider.md) | `claude_code` · `claude,codex,opencode` |
-| `CAW_MODEL` | Default model name | `opus` · `gpt-5.2-codex` |
+| `CAW_MODEL` | Default model name | `opus` · `gpt-5.5` |
 | `CAW_EFFORT` | Default reasoning effort | `high` · `medium` · `low` |
 | `CAW_AUTOWAIT` | Auto-wait on usage limits (on by default) | `0` / `false` to disable |
 | `CAW_LOG` | Console [display mode](../guides/display-and-logging.md) | `full` · `short` · `result` · `off` |

@@ -10,7 +10,6 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from caw.display import Display, get_global_display
@@ -125,28 +124,6 @@ def _cleanup_processes() -> None:
 atexit.register(_cleanup_processes)
 
 
-def _read_codex_config_model() -> str | None:
-    """Read the default model from ``~/.codex/config.toml``, if available."""
-    config_path = Path.home() / ".codex" / "config.toml"
-    if not config_path.is_file():
-        return None
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # Python < 3.11
-        try:
-            import tomli as tomllib  # type: ignore[no-redef]
-        except ModuleNotFoundError:
-            # Fall back to a simple regex parse for the top-level model key
-            text = config_path.read_text()
-            m = re.match(r'^model\s*=\s*"([^"]+)"', text, re.MULTILINE)
-            return m.group(1) if m else None
-    try:
-        data = tomllib.loads(config_path.read_text())
-        return data.get("model")
-    except Exception:
-        return None
-
-
 class CodexSession(ProviderSession):
     """Live session backed by the ``codex`` CLI."""
 
@@ -160,7 +137,7 @@ class CodexSession(ProviderSession):
         sandbox: str | None = None,
     ) -> None:
         self._session_id = session_id or str(uuid.uuid4())
-        self._model = model or _read_codex_config_model()
+        self._model = model
         self._mcp_servers = mcp_servers
         self._system_prompt = system_prompt
         self._reasoning = reasoning
@@ -544,8 +521,8 @@ class CodexSession(ProviderSession):
         return self.trajectory
 
 
-_MODEL_TIER_MAP: dict[ModelTier, str] = {
-    ModelTier.STRONGEST: "gpt-5.3-codex",
+_MODEL_TIER_MAP: dict[ModelTier, str | None] = {
+    ModelTier.STRONGEST: None,
     ModelTier.FAST: "gpt-5.3-codex-spark",
 }
 
@@ -566,7 +543,7 @@ class CodexProvider(Provider):
 
         return codex_auth_signal()
 
-    def resolve_model(self, tier: ModelTier) -> str:
+    def resolve_model(self, tier: ModelTier) -> str | None:
         return _MODEL_TIER_MAP[tier]
 
     def resolve_tool_restrictions(self, tools: ToolGroup) -> dict[str, Any]:

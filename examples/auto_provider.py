@@ -36,8 +36,9 @@ def main():
 
     # Just use it. If the selected provider errors or is rate-limited on the
     # first send, caw silently falls back to the next installed one in the order.
-    traj = agent.completion("Reply with a one-line hello.")
-    print(f"[{traj.agent}] {traj.result}")
+    traj = agent.completion("Reply with a one-line hello and include your provider name.")
+    print(f"Provider used: {traj.agent}")
+    print(f"Agent reply: {traj.result}")
 
     # --- Per-agent order (overrides the global setting). ---
     other = Agent(provider=["codex", "claude"])

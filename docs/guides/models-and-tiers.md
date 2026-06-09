@@ -11,7 +11,7 @@ Pass whatever the backend understands:
 from caw import Agent
 
 agent = Agent(provider="claude_code", model="opus")
-agent = Agent(provider="codex", model="gpt-5.2-codex")
+agent = Agent(provider="codex", model="gpt-5.5")
 ```
 
 A concrete string is tied to one provider. In an [auto-provider](auto-provider.md) order it is
@@ -31,7 +31,7 @@ agent = Agent(model=ModelTier.FAST)       # provider picks its fast model
 
 | Tier | Meaning | Example (Claude Code) | Example (Codex) |
 |------|---------|-----------------------|-----------------|
-| `ModelTier.STRONGEST` | Best available model | `opus` | `gpt-5.2-codex` |
+| `ModelTier.STRONGEST` | Best available model | `opus` | provider default |
 | `ModelTier.FAST` | Cheapest / fastest | `claude-haiku-4-5` | `gpt-5.3-codex-spark` |
 
 Because tiers re-resolve per provider, they're the right choice whenever you use a fallback
