@@ -546,7 +546,7 @@ class ClaudeCodeProvider(Provider):
     def start_interactive(
         self, initial_prompt: str, mcp_servers: list[MCPServer], capture_bytes: int = 0, **kwargs: Any
     ) -> InteractiveResult:
-        import pty
+        from caw._pty import drive_interactive_pty
 
         cmd = ["claude"]
 
@@ -586,93 +586,11 @@ class ClaudeCodeProvider(Provider):
         # Initial prompt as positional argument
         cmd.append(initial_prompt)
 
-        # Use a pty to capture a copy of stdout while the user
-        # interacts with the full TUI normally.
-        import fcntl
-        import select
-        import signal
-        import termios
-        import tty
-
-        captured = bytearray()
-        cap_limit = capture_bytes if capture_bytes > 0 else 0
-        master_fd, slave_fd = pty.openpty()
-
-        # Propagate the real terminal size to the pty
-        def _copy_winsize(from_fd: int, to_fd: int) -> None:
-            winsize = fcntl.ioctl(from_fd, termios.TIOCGWINSZ, b"\x00" * 8)
-            fcntl.ioctl(to_fd, termios.TIOCSWINSZ, winsize)
-
-        _copy_winsize(pty.STDOUT_FILENO, master_fd)
-
-        pid = os.fork()
-        if pid == 0:
-            # Child: become session leader, set slave as controlling terminal
-            os.close(master_fd)
-            os.setsid()
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-            os.dup2(slave_fd, 0)
-            os.dup2(slave_fd, 1)
-            os.dup2(slave_fd, 2)
-            if slave_fd > 2:
-                os.close(slave_fd)
-            os.execvp(cmd[0], cmd)
-
-        # Parent
-        os.close(slave_fd)
-
-        # Forward SIGWINCH to the child pty
-        old_sigwinch = signal.getsignal(signal.SIGWINCH)
-
-        def _on_winch(signum: int, frame: Any) -> None:
-            _copy_winsize(pty.STDOUT_FILENO, master_fd)
-            os.kill(pid, signal.SIGWINCH)
-
-        signal.signal(signal.SIGWINCH, _on_winch)
-
-        # Save and set raw mode on the real terminal
-        old_attrs = termios.tcgetattr(pty.STDIN_FILENO)
-        tty.setraw(pty.STDIN_FILENO)
-
-        try:
-            while True:
-                try:
-                    fds = select.select([pty.STDIN_FILENO, master_fd], [], [], 0.1)[0]
-                except select.error:
-                    continue
-                if master_fd in fds:
-                    try:
-                        data = os.read(master_fd, 4096)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    captured.extend(data)
-                    if cap_limit and len(captured) > cap_limit:
-                        del captured[: len(captured) - cap_limit]
-                    os.write(pty.STDOUT_FILENO, data)
-                if pty.STDIN_FILENO in fds:
-                    data = os.read(pty.STDIN_FILENO, 4096)
-                    if not data:
-                        break
-                    os.write(master_fd, data)
-
-            _, status = os.waitpid(pid, 0)
-            exit_code = os.waitstatus_to_exitcode(status)
-        except (KeyboardInterrupt, Exception):
-            os.kill(pid, signal.SIGTERM)
-            os.waitpid(pid, 0)
-            raise
-        finally:
-            # Restore terminal state, signal handler, and clean up
-            termios.tcsetattr(pty.STDIN_FILENO, termios.TCSAFLUSH, old_attrs)
-            signal.signal(signal.SIGWINCH, old_sigwinch)
-            os.close(master_fd)
+        def _cleanup() -> None:
             if mcp_config_path and os.path.exists(mcp_config_path):
                 os.unlink(mcp_config_path)
 
-        output = captured.decode("utf-8", errors="replace")
-        return InteractiveResult(exit_code=exit_code, output=output)
+        return drive_interactive_pty(cmd, capture_bytes=capture_bytes, on_exit=_cleanup)
 
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> ClaudeCodeSession:
         model = kwargs.get("model")

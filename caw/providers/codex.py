@@ -25,6 +25,7 @@ from caw.logger import (
 )
 from caw.models import (
     ContentBlock,
+    InteractiveResult,
     MCPServer,
     ModelTier,
     TextBlock,
@@ -124,6 +125,25 @@ def _cleanup_processes() -> None:
 atexit.register(_cleanup_processes)
 
 
+# -- MCP config helpers -------------------------------------------------------
+
+
+def _build_mcp_config_args(mcp_servers: list[MCPServer]) -> list[str]:
+    """Build ``-c`` config-override flags wiring up MCP servers for ``codex``.
+
+    Shared by the headless ``exec`` path and the interactive TUI path.
+    """
+    args: list[str] = []
+    for srv in mcp_servers:
+        if srv.url:
+            args += ["-c", f'mcp_servers.{srv.name}.url="{srv.url}"']
+        else:
+            args += ["-c", f'mcp_servers.{srv.name}.command="{srv.command}"']
+            if srv.args:
+                args += ["-c", f"mcp_servers.{srv.name}.args={json.dumps(srv.args)}"]
+    return args
+
+
 class CodexSession(ProviderSession):
     """Live session backed by the ``codex`` CLI."""
 
@@ -164,15 +184,7 @@ class CodexSession(ProviderSession):
 
     def _mcp_config_args(self) -> list[str]:
         """Build ``-c`` config override flags for MCP servers."""
-        args: list[str] = []
-        for srv in self._mcp_servers:
-            if srv.url:
-                args += ["-c", f'mcp_servers.{srv.name}.url="{srv.url}"']
-            else:
-                args += ["-c", f'mcp_servers.{srv.name}.command="{srv.command}"']
-                if srv.args:
-                    args += ["-c", f"mcp_servers.{srv.name}.args={json.dumps(srv.args)}"]
-        return args
+        return _build_mcp_config_args(self._mcp_servers)
 
     # ------------------------------------------------------------------
     # Core send (streaming Popen)
@@ -578,6 +590,51 @@ class CodexProvider(Provider):
 
     def _limit_probe_kwargs(self) -> dict[str, Any]:
         return {"sandbox": "read-only"}
+
+    def start_interactive(
+        self, initial_prompt: str, mcp_servers: list[MCPServer], capture_bytes: int = 0, **kwargs: Any
+    ) -> InteractiveResult:
+        """Launch ``codex`` interactively (TUI) with an initial prompt.
+
+        Invoking the bare ``codex`` binary with a positional prompt starts its
+        full-screen interactive session.  We run it through a pty so the user
+        drives the TUI directly while a copy of stdout is captured.
+
+        The sandbox mapping mirrors the headless ``exec`` path (see
+        ``CodexSession.send``): an explicit restrictive ``sandbox`` is passed
+        through as ``--sandbox``; otherwise codex runs with approvals and the
+        sandbox bypassed (``--dangerously-bypass-approvals-and-sandbox``).
+        """
+        from caw._pty import drive_interactive_pty
+
+        cmd = ["codex"]
+
+        model = kwargs.get("model")
+        if model:
+            cmd += ["-m", model]
+
+        reasoning = kwargs.get("reasoning")
+        if reasoning:
+            cmd += ["-c", f'model_reasoning_effort="{reasoning}"']
+
+        sandbox = kwargs.get("sandbox")
+        if sandbox is None or sandbox == "danger-full-access":
+            cmd += ["--dangerously-bypass-approvals-and-sandbox"]
+        else:
+            # The user is present in interactive mode, so codex's default
+            # approval flow handles escalation; just set the sandbox policy.
+            # (Unlike the headless `exec` path, the top-level TUI rejects
+            # `--full-auto`.)
+            cmd += ["--sandbox", sandbox]
+
+        cmd += _build_mcp_config_args(mcp_servers)
+
+        # codex has no --system-prompt flag; prepend it like the headless path.
+        system_prompt = kwargs.get("system_prompt")
+        prompt = f"{system_prompt}\n\n{initial_prompt}" if system_prompt else initial_prompt
+        cmd.append(prompt)
+
+        return drive_interactive_pty(cmd, capture_bytes=capture_bytes)
 
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> CodexSession:
         return CodexSession(

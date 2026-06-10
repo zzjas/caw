@@ -182,6 +182,30 @@ def _select_installed(order: list[str]) -> tuple[int, Provider]:
     return 0, _resolve_provider(order[0])
 
 
+def _distinct_providers() -> list[tuple[str, Provider]]:
+    """Every registered provider, deduped across aliases, in registration order.
+
+    Returns ``(canonical_name, provider)`` pairs where ``canonical_name`` is the
+    first alias each provider class was registered under (e.g. ``claude_code``
+    rather than ``claude``/``cc``)."""
+    out: list[tuple[str, Provider]] = []
+    seen: set[type[Provider]] = set()
+    for name, cls in _PROVIDER_REGISTRY.items():
+        if cls in seen:
+            continue
+        seen.add(cls)
+        out.append((name, cls()))
+    return out
+
+
+def installed_providers() -> list[tuple[str, Provider]]:
+    """Distinct providers whose CLI binary is on ``PATH`` (no auth check).
+
+    A fast, no-network filter over `_distinct_providers`, suitable for building
+    a "pick a provider" menu."""
+    return [(name, prov) for name, prov in _distinct_providers() if prov.find_binary() is not None]
+
+
 def _encode_resume_handle(provider: str, session_id: str, resume_key: str) -> str:
     """Pack everything needed to resume — provider, caw session id, and the
     backend resume key — into a JSON handle string.  Self-contained so a
@@ -704,7 +728,31 @@ class Agent:
             model = self.provider.resolve_model(model)
         return self.provider.check_health(live=live, model=model)
 
-    def interactive(self, initial_prompt: str, capture_bytes: int = 0, **kwargs: Any) -> InteractiveResult:
+    def _pick_interactive_provider(self) -> Provider | None:
+        """Prompt the user to choose among the installed providers.
+
+        Shows an arrow-key menu of the distinct installed providers (no auth
+        check).  Returns the chosen `Provider`, or ``None`` if the user
+        cancelled the menu.  Raises if no provider CLI is installed."""
+        from caw._menu import select_from_menu
+
+        installed = installed_providers()
+        if not installed:
+            raise RuntimeError("No coding-agent CLIs are installed; cannot launch interactive mode.")
+        labels = [f"{name}  ({prov.binary_name})" for name, prov in installed]
+        idx = select_from_menu("Select a provider:", labels)
+        if idx is None:
+            return None
+        return installed[idx][1]
+
+    def interactive(
+        self,
+        initial_prompt: str,
+        capture_bytes: int = 0,
+        *,
+        select_provider: bool = False,
+        **kwargs: Any,
+    ) -> InteractiveResult:
         """Launch the provider binary interactively with an initial prompt.
 
         The user interacts with the agent directly in their terminal.
@@ -715,11 +763,23 @@ class Agent:
             initial_prompt: The first message sent to the agent.
             capture_bytes: Maximum bytes of terminal output to keep (tail).
                 ``0`` (default) means capture everything.
+            select_provider: When ``True``, show an arrow-key menu of the
+                installed providers first and launch the one the user picks
+                (instead of this agent's configured provider).  If the user
+                cancels the menu, no agent is launched and an
+                ``InteractiveResult`` with exit code ``130`` is returned.
 
         Returns:
             An ``InteractiveResult`` with the exit code and captured terminal
             output.
         """
+        if select_provider:
+            provider = self._pick_interactive_provider()
+            if provider is None:
+                return InteractiveResult(exit_code=130, output="")
+        else:
+            provider = self.provider
+
         merged = {**self._kwargs, **kwargs}
 
         # Remove session-only concerns
@@ -729,12 +789,12 @@ class Agent:
         # Resolve model tier
         model = merged.get("model")
         if isinstance(model, ModelTier):
-            merged["model"] = self.provider.resolve_model(model)
+            merged["model"] = provider.resolve_model(model)
 
         # Resolve tool restrictions — default to ALL (user is present)
         tools = merged.pop("tools", None)
         if tools is not None:
-            restrictions = self.provider.resolve_tool_restrictions(tools)
+            restrictions = provider.resolve_tool_restrictions(tools)
             merged.update(restrictions)
 
         # Start MCP tool server handles
@@ -747,7 +807,7 @@ class Agent:
             all_mcp.append(MCPServer(name=handle.server_id, url=handle.url))
 
         try:
-            return self.provider.start_interactive(
+            return provider.start_interactive(
                 initial_prompt, mcp_servers=all_mcp, capture_bytes=capture_bytes, **merged
             )
         finally:

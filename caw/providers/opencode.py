@@ -641,14 +641,7 @@ class OpencodeProvider(Provider):
         through a pty so stdin/stdout/stderr are inherited and a copy of stdout
         is captured.
         """
-        import fcntl
-        import pty
-        import select
-        import signal
-        import termios
-        import tty
-
-        from caw.models import InteractiveResult
+        from caw._pty import drive_interactive_pty
 
         cmd = [_find_opencode_binary(), "run", "--interactive"]
 
@@ -684,85 +677,13 @@ class OpencodeProvider(Provider):
 
         cmd.append(initial_prompt)
 
-        env = os.environ.copy()
-        if config_path:
-            env["OPENCODE_CONFIG"] = config_path
+        env = {"OPENCODE_CONFIG": config_path} if config_path else None
 
-        captured = bytearray()
-        cap_limit = capture_bytes if capture_bytes > 0 else 0
-        master_fd, slave_fd = pty.openpty()
-
-        def _copy_winsize(from_fd: int, to_fd: int) -> None:
-            winsize = fcntl.ioctl(from_fd, termios.TIOCGWINSZ, b"\x00" * 8)
-            fcntl.ioctl(to_fd, termios.TIOCSWINSZ, winsize)
-
-        _copy_winsize(pty.STDOUT_FILENO, master_fd)
-
-        pid = os.fork()
-        if pid == 0:
-            os.close(master_fd)
-            os.setsid()
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-            os.dup2(slave_fd, 0)
-            os.dup2(slave_fd, 1)
-            os.dup2(slave_fd, 2)
-            if slave_fd > 2:
-                os.close(slave_fd)
-            for k, v in env.items():
-                os.environ[k] = v
-            os.execvp(cmd[0], cmd)
-
-        os.close(slave_fd)
-
-        old_sigwinch = signal.getsignal(signal.SIGWINCH)
-
-        def _on_winch(signum: int, frame: Any) -> None:
-            _copy_winsize(pty.STDOUT_FILENO, master_fd)
-            os.kill(pid, signal.SIGWINCH)
-
-        signal.signal(signal.SIGWINCH, _on_winch)
-
-        old_attrs = termios.tcgetattr(pty.STDIN_FILENO)
-        tty.setraw(pty.STDIN_FILENO)
-
-        try:
-            while True:
-                try:
-                    fds = select.select([pty.STDIN_FILENO, master_fd], [], [], 0.1)[0]
-                except select.error:
-                    continue
-                if master_fd in fds:
-                    try:
-                        data = os.read(master_fd, 4096)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    captured.extend(data)
-                    if cap_limit and len(captured) > cap_limit:
-                        del captured[: len(captured) - cap_limit]
-                    os.write(pty.STDOUT_FILENO, data)
-                if pty.STDIN_FILENO in fds:
-                    data = os.read(pty.STDIN_FILENO, 4096)
-                    if not data:
-                        break
-                    os.write(master_fd, data)
-
-            _, status = os.waitpid(pid, 0)
-            exit_code = os.waitstatus_to_exitcode(status)
-        except (KeyboardInterrupt, Exception):
-            os.kill(pid, signal.SIGTERM)
-            os.waitpid(pid, 0)
-            raise
-        finally:
-            termios.tcsetattr(pty.STDIN_FILENO, termios.TCSAFLUSH, old_attrs)
-            signal.signal(signal.SIGWINCH, old_sigwinch)
-            os.close(master_fd)
+        def _cleanup() -> None:
             if config_path and os.path.exists(config_path):
                 try:
                     os.unlink(config_path)
                 except OSError:
                     pass
 
-        output = captured.decode("utf-8", errors="replace")
-        return InteractiveResult(exit_code=exit_code, output=output)
+        return drive_interactive_pty(cmd, env=env, capture_bytes=capture_bytes, on_exit=_cleanup)

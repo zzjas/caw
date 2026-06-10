@@ -7,6 +7,7 @@ from caw.agent import (
     Session,
     get_provider_models,
     get_provider_order,
+    installed_providers,
     register_provider,
     set_provider_order,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "set_provider_order",
     "get_provider_order",
     "get_provider_models",
+    "installed_providers",
     "register_tool",
     "start_viewer_server",
     "tool",

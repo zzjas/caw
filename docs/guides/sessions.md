@@ -66,6 +66,15 @@ turn = await task
 
 `agent.interactive(prompt)` hands control to the user's terminal — stdin/stdout/stderr are
 inherited so the user talks to the agent directly, while caw captures a copy of the output.
+All three providers support it (Claude Code, Codex, and opencode), each launching its own
+full-screen TUI with your initial prompt.
+
+Pass `select_provider=True` to choose which backend to launch at runtime: caw shows an
+arrow-key menu of the *installed* providers (↑/↓ to move, `Enter` to choose, `q`/`Esc` to
+cancel) and launches the one you pick, ignoring the agent's configured provider. Cancelling
+the menu returns an `InteractiveResult` with exit code `130` without launching anything.
+`caw.installed_providers()` exposes the same list (name + provider) for your own menus.
+
 See [`examples/interactive.py`](https://github.com/zzjas/caw/blob/main/examples/interactive.py):
 
 ```python
