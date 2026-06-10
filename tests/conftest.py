@@ -24,3 +24,18 @@ def _isolate_caw_auth_dir(tmp_path_factory, monkeypatch):
     auth_dir = tmp_path_factory.mktemp("caw_auth")
     monkeypatch.setenv("CAW_AUTH_DIR", str(auth_dir))
     return auth_dir
+
+
+@pytest.fixture(autouse=True)
+def _isolate_caw_home(tmp_path_factory, monkeypatch):
+    """Isolate model config: point CAW_HOME at a throwaway dir and disable remote
+    defaults fetches, so model resolution is deterministic (baked defaults only)
+    and no test reads/writes the developer's real ~/.caw/config.json."""
+    import caw.config as _config
+
+    home = tmp_path_factory.mktemp("caw_home")
+    monkeypatch.setenv("CAW_HOME", str(home))
+    monkeypatch.setenv("CAW_DEFAULTS_URL", "off")
+    _config._reset_remote_state()
+    yield home
+    _config._reset_remote_state()

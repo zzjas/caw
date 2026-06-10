@@ -150,12 +150,6 @@ _TOOL_GROUP_MAP: dict[ToolGroup, list[str]] = {
 }
 
 
-_MODEL_TIER_MAP: dict[ModelTier, str] = {
-    ModelTier.STRONGEST: os.environ.get("OPENCODE_MODEL", "openai/gpt-5.3-codex"),
-    ModelTier.FAST: os.environ.get("OPENCODE_SMALL_FAST_MODEL", "openai/gpt-5.3-codex-spark"),
-}
-
-
 class OpencodeSession(ProviderSession):
     """Live session backed by the ``opencode`` CLI."""
 
@@ -579,8 +573,10 @@ class OpencodeProvider(Provider):
 
         return opencode_auth_signal()
 
-    def resolve_model(self, tier: ModelTier) -> str:
-        return _MODEL_TIER_MAP[tier]
+    def resolve_model(self, tier: ModelTier) -> str | None:
+        from caw.config import get_model
+
+        return get_model("opencode", tier)
 
     def resolve_tool_restrictions(self, tools: ToolGroup) -> dict[str, Any]:
         if tools == ToolGroup.ALL:

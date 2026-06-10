@@ -9,6 +9,7 @@ from pathlib import Path
 import typer
 
 from caw.auth.cli import app as auth_app
+from caw.config_cli import app as config_app
 from caw.traj_cli import TrajectoryRenderError, inspect_trajectory
 
 app = typer.Typer(
@@ -18,6 +19,7 @@ app = typer.Typer(
 )
 
 app.add_typer(auth_app, name="auth")
+app.add_typer(config_app, name="config")
 
 
 @app.command()

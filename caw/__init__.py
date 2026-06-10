@@ -2,7 +2,14 @@
 
 __version__ = "0.1.7"
 
-from caw.agent import Agent, Session, get_provider_order, register_provider, set_provider_order
+from caw.agent import (
+    Agent,
+    Session,
+    get_provider_models,
+    get_provider_order,
+    register_provider,
+    set_provider_order,
+)
 from caw.auth import get_docker_flags as auth_get_docker_flags
 from caw.auth import get_status as auth_get_status
 from caw.auth import setup as auth_setup
@@ -90,6 +97,7 @@ __all__ = [
     "register_provider",
     "set_provider_order",
     "get_provider_order",
+    "get_provider_models",
     "register_tool",
     "start_viewer_server",
     "tool",

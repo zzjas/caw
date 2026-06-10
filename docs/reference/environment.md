@@ -11,7 +11,12 @@ the `Agent` constructor or a method call.
 | `CAW_EFFORT` | Default reasoning effort | `high` · `medium` · `low` |
 | `CAW_AUTOWAIT` | Auto-wait on usage limits (on by default) | `0` / `false` to disable |
 | `CAW_LOG` | Console [display mode](../guides/display-and-logging.md) | `full` · `short` · `result` · `off` |
+| `CAW_HOME` | Base dir for caw state — config & caches (default `~/.caw/`) | `/path/to/caw` |
 | `CAW_AUTH_DIR` | Relocate the [auth staging dir](../guides/docker-credentials.md) (default `~/.caw/auth/`) | `/path/to/auth` |
+| `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` | Override the Claude Code [tier defaults](../guides/models-and-tiers.md) (strongest / fast) | `opus` · `claude-haiku-4-5` |
+| `OPENCODE_MODEL` / `OPENCODE_SMALL_FAST_MODEL` | Override the opencode tier defaults (strongest / fast) | `openai/gpt-5.5` |
+| `CAW_DEFAULTS_URL` | Remote source for shipped [tier defaults](../guides/models-and-tiers.md); `off` to disable fetching | URL · `off` |
+| `CAW_DEFAULTS_TTL` | Cache window (seconds) for remote tier defaults (default `86400`) | `3600` |
 
 ## Precedence
 

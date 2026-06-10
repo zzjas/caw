@@ -41,8 +41,34 @@ opt into fallback.
 !!! tip "Prefer a `ModelTier` in auto mode"
     Use a [`ModelTier`](models-and-tiers.md) (or no model) rather than a concrete model
     string. Tiers are re-resolved per provider, so model selection stays portable across the
-    fallback. A concrete model string is **dropped** when falling back to a different provider
-    — it would be meaningless to the others.
+    fallback. A bare concrete model string is **dropped** when falling back to a different
+    provider — it would be meaningless to the others.
+
+## A model per provider in the order
+
+To pin a *specific* model to each provider in the order, attach it to
+`set_provider_order` — as `(name, model)` tuples or a `models=` mapping. Each value may be a
+concrete string or a `ModelTier`. Because the model is bound to its provider, it is honored even
+when that provider is reached as a fallback (unlike a bare Agent-level string):
+
+```python
+import caw
+from caw import Agent, ModelTier
+
+caw.set_provider_order([
+    ("claude", ModelTier.STRONGEST),   # re-resolved via the claude tier config
+    ("codex", "gpt-5.5"),              # concrete, bound to codex
+    ("opencode", "openai/gpt-5.5"),
+])
+# Equivalent: caw.set_provider_order(["claude", "codex"], models={"codex": "gpt-5.5"})
+
+caw.get_provider_models()             # {'claude': <ModelTier.STRONGEST>, 'codex': 'gpt-5.5', ...}
+
+Agent(provider="auto")                # each provider uses its attached model
+```
+
+A provider's order-model applies only when the `Agent` sets no `model` of its own — an explicit
+`model=` (or `CAW_MODEL`) on the `Agent` always wins.
 
 ## Inspecting the selection
 

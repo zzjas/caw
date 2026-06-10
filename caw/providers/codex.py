@@ -521,12 +521,6 @@ class CodexSession(ProviderSession):
         return self.trajectory
 
 
-_MODEL_TIER_MAP: dict[ModelTier, str | None] = {
-    ModelTier.STRONGEST: None,
-    ModelTier.FAST: "gpt-5.3-codex-spark",
-}
-
-
 class CodexProvider(Provider):
     """Provider that delegates to the ``codex`` CLI."""
 
@@ -544,7 +538,9 @@ class CodexProvider(Provider):
         return codex_auth_signal()
 
     def resolve_model(self, tier: ModelTier) -> str | None:
-        return _MODEL_TIER_MAP[tier]
+        from caw.config import get_model
+
+        return get_model("codex", tier)
 
     def resolve_tool_restrictions(self, tools: ToolGroup) -> dict[str, Any]:
         if tools == ToolGroup.ALL:

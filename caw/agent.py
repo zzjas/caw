@@ -73,10 +73,17 @@ def _resolve_provider(name: str | None) -> Provider:
 
 # Global provider fallback order, used by ``provider="auto"`` / unset provider.
 _PROVIDER_ORDER: list[str] | None = None
+# Optional per-provider model selection that rides along with the order, keyed
+# by provider name.  Values are concrete model strings or ``ModelTier`` values.
+_PROVIDER_ORDER_MODELS: dict[str, str | ModelTier] = {}
 
 
-def set_provider_order(order: list[str] | None) -> None:
-    """Set the global provider fallback order.
+def set_provider_order(
+    order: list[str | tuple[str, str | ModelTier]] | None,
+    *,
+    models: dict[str, str | ModelTier] | None = None,
+) -> None:
+    """Set the global provider fallback order, optionally with per-provider models.
 
     Pass provider names/aliases in priority order, e.g.
     ``set_provider_order(["claude", "codex", "opencode"])``.  Agents created
@@ -84,15 +91,59 @@ def set_provider_order(order: list[str] | None) -> None:
     will select the first *installed* provider in this order and gracefully
     fall back to the next on a first-send failure.  Pass ``None`` to clear it.
 
-    An explicit ``provider=`` argument on an Agent always overrides this.
+    To also pin a model per provider, give ``(name, model)`` tuples and/or a
+    ``models`` mapping; both accept a concrete model string or a `ModelTier`::
+
+        set_provider_order([("claude", ModelTier.STRONGEST), ("codex", "gpt-5.5")])
+        set_provider_order(["claude", "codex"], models={"claude": "opus"})
+
+    A provider's order-model is applied only when the Agent itself sets no
+    ``model`` — an explicit ``model=`` (or ``CAW_MODEL``) on the Agent wins.
+    Because the model is attached to a specific provider, it is honored even
+    when that provider is reached as a fallback (unlike a bare Agent-level model
+    string, which is provider-specific and dropped on fallback).
+
+    An explicit ``provider=`` argument on an Agent always overrides this order.
     """
-    global _PROVIDER_ORDER
-    _PROVIDER_ORDER = [str(p) for p in order] if order else None
+    global _PROVIDER_ORDER, _PROVIDER_ORDER_MODELS
+    if not order:
+        _PROVIDER_ORDER = None
+        _PROVIDER_ORDER_MODELS = {}
+        return
+    names: list[str] = []
+    order_models: dict[str, str | ModelTier] = {}
+    for item in order:
+        if isinstance(item, (tuple, list)):
+            name = str(item[0])
+            model = item[1] if len(item) > 1 else None
+            if model is not None:
+                order_models[name] = model
+        else:
+            name = str(item)
+        names.append(name)
+    if models:
+        for name, model in models.items():
+            if model is not None:
+                order_models[str(name)] = model
+    _PROVIDER_ORDER = names
+    _PROVIDER_ORDER_MODELS = order_models
 
 
 def get_provider_order() -> list[str] | None:
     """Return the global provider fallback order, or ``None`` if unset."""
     return list(_PROVIDER_ORDER) if _PROVIDER_ORDER else None
+
+
+def get_provider_models() -> dict[str, str | ModelTier]:
+    """Return the per-provider model overrides set via `set_provider_order`."""
+    return dict(_PROVIDER_ORDER_MODELS)
+
+
+def _provider_order_model(provider_name: str | None) -> str | ModelTier | None:
+    """Look up the order-model for *provider_name* (None if unset)."""
+    if not provider_name:
+        return None
+    return _PROVIDER_ORDER_MODELS.get(provider_name)
 
 
 def _resolve_provider_order(provider: str | list[str] | tuple[str, ...] | None) -> list[str]:
@@ -752,7 +803,9 @@ class Agent:
 
         def _build(provider_name: str) -> ProviderSession:
             prov = _resolve_provider(provider_name)
-            merged = self._provider_session_kwargs(prov, base, is_fallback=(provider_name != first_choice))
+            merged = self._provider_session_kwargs(
+                prov, base, is_fallback=(provider_name != first_choice), provider_name=provider_name
+            )
             if session_id:
                 merged["session_id"] = session_id
             return prov.start_session(mcp_servers=all_mcp, **merged)
@@ -896,7 +949,12 @@ class Agent:
         return auto_wait, session_metadata, logger
 
     def _provider_session_kwargs(
-        self, provider: Provider, base: dict[str, Any], *, is_fallback: bool = False
+        self,
+        provider: Provider,
+        base: dict[str, Any],
+        *,
+        is_fallback: bool = False,
+        provider_name: str | None = None,
     ) -> dict[str, Any]:
         """Resolve provider-specific ``start_session`` kwargs from *base*.
 
@@ -907,13 +965,27 @@ class Agent:
         a fallback provider (``is_fallback=True``) — the fallback uses its own
         default rather than a foreign model id.  Pass a `ModelTier` for a
         portable model selection across an auto-provider order.
+
+        When *base* carries no model and a per-provider model was attached via
+        `set_provider_order`, that model is applied here.  Because it is bound to
+        this specific provider it is never treated as a foreign id, so it
+        survives even when *provider* is reached as a fallback.
         """
         merged = dict(base)
         model = merged.get("model")
+        from_order = False
+        if model is None:
+            order_model = _provider_order_model(provider_name)
+            if order_model is not None:
+                model = order_model
+                from_order = True
         if isinstance(model, ModelTier):
             merged["model"] = provider.resolve_model(model)
-        elif isinstance(model, str) and is_fallback:
-            merged.pop("model", None)
+        elif isinstance(model, str):
+            if is_fallback and not from_order:
+                merged.pop("model", None)
+            else:
+                merged["model"] = model
         tools = merged.pop("tools", None)
         if tools is None:
             tools = ToolGroup.ALL - ToolGroup.INTERACTION

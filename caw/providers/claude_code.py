@@ -41,11 +41,6 @@ from caw.provider import Provider, ProviderSession
 
 # -- Tool group → Claude Code tool name mapping --------------------------------
 
-_MODEL_TIER_MAP: dict[ModelTier, str] = {
-    ModelTier.STRONGEST: os.environ.get("ANTHROPIC_MODEL", "opus"),
-    ModelTier.FAST: os.environ.get("ANTHROPIC_SMALL_FAST_MODEL", "claude-haiku-4-5-20251001"),
-}
-
 _TOOL_GROUP_MAP: dict[ToolGroup, list[str]] = {
     ToolGroup.READER: ["Read", "Glob", "Grep"],
     ToolGroup.WRITER: ["Write", "Edit", "NotebookEdit"],
@@ -524,8 +519,10 @@ class ClaudeCodeProvider(Provider):
 
         return claude_auth_signal()
 
-    def resolve_model(self, tier: ModelTier) -> str:
-        return _MODEL_TIER_MAP[tier]
+    def resolve_model(self, tier: ModelTier) -> str | None:
+        from caw.config import get_model
+
+        return get_model("claude_code", tier)
 
     def resolve_tool_restrictions(self, tools: ToolGroup) -> dict[str, Any]:
         if tools == ToolGroup.ALL:
