@@ -50,6 +50,12 @@ _CODEX_LIMIT_RE = re.compile(
 
 _DEFAULT_WAIT_MINUTES = 60
 
+# Transient stream-retry notices that codex emits as `error` events while it
+# reconnects on its own (e.g. "Reconnecting... 2/5 (stream disconnected before
+# completion: ...)"). These must not abort the turn — codex retries internally
+# and emits turn.failed only once retries are exhausted.
+_TRANSIENT_STREAM_ERROR_RE = re.compile(r"^Reconnecting\.{3}\s+\d+/\d+")
+
 
 def _parse_codex_reset_minutes(text: str) -> int | None:
     """Parse a Codex limit message and return minutes until reset (+ 5 min buffer).
@@ -470,6 +476,13 @@ class CodexSession(ProviderSession):
                 if display:
                     display.on_text(block)
                 log_text(self._logger, block)
+            elif event_type == "error" and _TRANSIENT_STREAM_ERROR_RE.search(error_msg):
+                # Codex emits stream-retry notices ("Reconnecting... 2/5 ...")
+                # as `error` events while it reconnects on its own. Killing the
+                # turn here would abort a session codex was about to recover;
+                # if retries are exhausted codex follows up with turn.failed.
+                if self._logger:
+                    self._logger.warning(f"codex transient stream error, letting it retry: {error_msg}")
             else:
                 if self._logger:
                     self._logger.error(f"codex turn failed: {error_msg}")
