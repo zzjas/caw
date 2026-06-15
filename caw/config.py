@@ -60,6 +60,9 @@ _ENV_OVERRIDES: dict[tuple[str, str], str] = {
 _PROVIDER_ALIASES: dict[str, str] = {
     "claude": "claude_code",
     "cc": "claude_code",
+    # The subscription-backed TUI variant shares claude_code's model defaults,
+    # env overrides, and pricing table.
+    "claudep": "claude_code",
 }
 
 

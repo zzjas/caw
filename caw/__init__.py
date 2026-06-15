@@ -44,6 +44,7 @@ from caw.models import (
 )
 from caw.provider import Provider, ProviderSession
 from caw.providers.claude_code import ClaudeCodeProvider
+from caw.providers.claudep import ClaudePProvider
 from caw.providers.codex import CodexProvider
 from caw.providers.opencode import OpencodeProvider
 from caw.storage import JsonlWriter, SessionStore
@@ -54,6 +55,7 @@ from caw.viewer import ViewerServer, start_viewer_server
 register_provider("claude_code", ClaudeCodeProvider)
 register_provider("claude", ClaudeCodeProvider)
 register_provider("cc", ClaudeCodeProvider)
+register_provider("claudep", ClaudePProvider)
 register_provider("codex", CodexProvider)
 register_provider("opencode", OpencodeProvider)
 
@@ -65,6 +67,7 @@ __all__ = [
     "ProviderHealth",
     "check_providers",
     "ClaudeCodeProvider",
+    "ClaudePProvider",
     "CodexProvider",
     "OpencodeProvider",
     "JsonlWriter",

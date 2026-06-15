@@ -149,6 +149,11 @@ def detect_usage_limit(text: str) -> int | None:
 class ClaudeCodeSession(ProviderSession):
     """Live session backed by the ``claude`` CLI."""
 
+    #: Provider identifier recorded in trajectories and surfaced to the display.
+    #: Subclasses (e.g. the subscription-backed ``claudep`` TUI session) override
+    #: this so resume routing and on-screen labels point at the right provider.
+    _AGENT_NAME = "claude_code"
+
     def __init__(
         self,
         mcp_servers: list[MCPServer],
@@ -207,23 +212,7 @@ class ClaudeCodeSession(ProviderSession):
 
     def send(self, message: str) -> Turn:
         display = get_global_display()
-
-        if display:
-            if not self._has_sent:
-                display.on_metadata(
-                    agent="claude_code",
-                    model=self._model or "",
-                    session=self._session_id,
-                )
-            display.on_user_message(message)
-        if not self._has_sent:
-            log_metadata(
-                self._logger,
-                agent="claude_code",
-                model=self._model or "",
-                session=self._session_id,
-            )
-        log_user_message(self._logger, message)
+        self._emit_send_preamble(message, display)
 
         cmd = [
             "claude",
@@ -343,6 +332,98 @@ class ClaudeCodeSession(ProviderSession):
     # Per-event processing
     # ------------------------------------------------------------------
 
+    def _emit_send_preamble(self, message: str, display: Display | None) -> None:
+        """Emit the metadata + user-message events at the start of a send().
+
+        Shared by the ``-p`` stream path and the ``claudep`` TUI path so each
+        announces itself under its own ``_AGENT_NAME``.
+        """
+        if display:
+            if not self._has_sent:
+                display.on_metadata(
+                    agent=self._AGENT_NAME,
+                    model=self._model or "",
+                    session=self._session_id,
+                )
+            display.on_user_message(message)
+        if not self._has_sent:
+            log_metadata(
+                self._logger,
+                agent=self._AGENT_NAME,
+                model=self._model or "",
+                session=self._session_id,
+            )
+        log_user_message(self._logger, message)
+
+    def _emit_blocks(
+        self,
+        new_blocks: list[ContentBlock],
+        blocks: list[ContentBlock],
+        tool_blocks: dict[str, ToolUse],
+        display: Display | None,
+    ) -> None:
+        """Append parsed blocks to *blocks* and fan them out to display + logger."""
+        for block in new_blocks:
+            blocks.append(block)
+            if isinstance(block, TextBlock):
+                if display:
+                    display.on_text(block)
+                log_text(self._logger, block)
+            elif isinstance(block, ThinkingBlock):
+                if display:
+                    display.on_thinking(block)
+                log_thinking(self._logger, block)
+            elif isinstance(block, ToolUse):
+                if display:
+                    display.on_tool_call(block)
+                log_tool_call(self._logger, block)
+                tool_blocks[block.id] = block
+
+    def _pair_tool_results(
+        self,
+        event: dict[str, Any],
+        tool_blocks: dict[str, ToolUse],
+        display: Display | None,
+    ) -> None:
+        """Attach tool_result payloads from a ``user`` event to their ToolUse.
+
+        Robust to the canonical session JSONL where ``message.content`` may be a
+        plain string (the user's own prompt) rather than a list of blocks.
+        """
+        msg_data = event.get("message", {})
+        content_items = msg_data.get("content", [])
+        if not isinstance(content_items, list):
+            return
+        for content in content_items:
+            if not isinstance(content, dict) or content.get("type") != "tool_result":
+                continue
+            tid = content.get("tool_use_id", "")
+            if not tid:
+                continue
+            text_parts: list[str] = []
+            raw_content = content.get("content", "")
+            if isinstance(raw_content, str):
+                text_parts.append(raw_content)
+            elif isinstance(raw_content, list):
+                for part in raw_content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+            output = "\n".join(text_parts)
+            # HTTP MCP transport wraps results in {"result": "..."}
+            try:
+                parsed = json.loads(output)
+                if isinstance(parsed, dict) and "result" in parsed:
+                    output = str(parsed["result"])
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            is_error = content.get("is_error", False)
+            if tid in tool_blocks:
+                tool_blocks[tid].output = output
+                tool_blocks[tid].is_error = is_error
+                if display:
+                    display.on_tool_result(tool_blocks[tid])
+                log_tool_result(self._logger, tool_blocks[tid])
+
     def _process_event(
         self,
         event: dict[str, Any],
@@ -362,54 +443,11 @@ class ClaudeCodeSession(ProviderSession):
                     log_metadata(self._logger, model=self._model)
 
         elif event_type == "assistant":
-            new_blocks = self._parse_assistant_blocks(event)
-            for block in new_blocks:
-                blocks.append(block)
-                if isinstance(block, TextBlock):
-                    if display:
-                        display.on_text(block)
-                    log_text(self._logger, block)
-                elif isinstance(block, ThinkingBlock):
-                    if display:
-                        display.on_thinking(block)
-                    log_thinking(self._logger, block)
-                elif isinstance(block, ToolUse):
-                    if display:
-                        display.on_tool_call(block)
-                    log_tool_call(self._logger, block)
-                    tool_blocks[block.id] = block
+            self._emit_blocks(self._parse_assistant_blocks(event), blocks, tool_blocks, display)
 
         elif event_type == "user":
             # User events carry tool results — pair eagerly
-            msg_data = event.get("message", {})
-            for content in msg_data.get("content", []):
-                if content.get("type") == "tool_result":
-                    tid = content.get("tool_use_id", "")
-                    if tid:
-                        text_parts: list[str] = []
-                        raw_content = content.get("content", "")
-                        if isinstance(raw_content, str):
-                            text_parts.append(raw_content)
-                        elif isinstance(raw_content, list):
-                            for part in raw_content:
-                                if isinstance(part, dict) and part.get("type") == "text":
-                                    text_parts.append(part.get("text", ""))
-                        output = "\n".join(text_parts)
-                        # HTTP MCP transport wraps results in {"result": "..."}
-                        try:
-                            parsed = json.loads(output)
-                            if isinstance(parsed, dict) and "result" in parsed:
-                                output = str(parsed["result"])
-                        except (json.JSONDecodeError, TypeError, ValueError):
-                            pass
-                        is_error = content.get("is_error", False)
-
-                        if tid in tool_blocks:
-                            tool_blocks[tid].output = output
-                            tool_blocks[tid].is_error = is_error
-                            if display:
-                                display.on_tool_result(tool_blocks[tid])
-                            log_tool_result(self._logger, tool_blocks[tid])
+            self._pair_tool_results(event, tool_blocks, display)
 
         elif event_type == "result":
             return self._parse_usage(event), event.get("duration_ms", 0)
@@ -482,7 +520,7 @@ class ClaudeCodeSession(ProviderSession):
     @property
     def trajectory(self) -> Trajectory:
         return Trajectory(
-            agent="claude_code",
+            agent=self._AGENT_NAME,
             model=self._model or "",
             session_id=self._session_id,
             created_at=self._created_at,
