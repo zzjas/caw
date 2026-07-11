@@ -13,6 +13,11 @@
     }
   },
   "opencode": {
+    "openai/gpt-5.6-sol": {
+      "input": 5.0,
+      "cached_input": 0.5,
+      "output": 30.0
+    },
     "openai/gpt-5.5": {
       "input": 5.0,
       "cached_input": 0.5,

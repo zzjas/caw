@@ -22,7 +22,7 @@ def test_baked_defaults_resolution():
     assert config.get_model("claude_code", ModelTier.FAST) == "claude-haiku-4-5-20251001"
     assert config.get_model("codex", ModelTier.STRONGEST) is None
     assert config.get_model("codex", ModelTier.FAST) == "gpt-5.3-codex-spark"
-    assert config.get_model("opencode", "strongest") == "openai/gpt-5.5"
+    assert config.get_model("opencode", "strongest") == "openai/gpt-5.6-sol"
 
 
 def test_alias_resolves_to_canonical():
