@@ -52,3 +52,30 @@ class TestTransientStreamErrors:
         event = {"type": "error", "message": "fatal: gave up Reconnecting... 5/5"}
         with pytest.raises(RuntimeError, match="Codex turn failed"):
             _process(_session(), event)
+
+    def test_the_retry_notice_logs_through_the_logger_protocol(self):
+        """The notice must use warn(), the method AgentLogger defines.
+
+        A logger implementing exactly the protocol (info/warn/error, e.g. a
+        RedisLogger) would otherwise raise AttributeError here — aborting the
+        turn on the very notice that is supposed to be benign.  The other tests
+        leave the logger unset, so the guard skips the call entirely.
+        """
+
+        class ProtocolLogger:
+            def __init__(self):
+                self.warnings = []
+
+            def info(self, message: str) -> None: ...
+            def warn(self, message: str) -> None:
+                self.warnings.append(message)
+
+            def error(self, message: str) -> None: ...
+
+        session = _session()
+        logger = ProtocolLogger()
+        session.set_logger(logger)
+        event = {"type": "error", "message": "Reconnecting... 2/5 (stream error)"}
+        assert _process(session, event) is None
+        assert len(logger.warnings) == 1
+        assert "letting it retry" in logger.warnings[0]

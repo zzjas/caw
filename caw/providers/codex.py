@@ -482,7 +482,7 @@ class CodexSession(ProviderSession):
                 # turn here would abort a session codex was about to recover;
                 # if retries are exhausted codex follows up with turn.failed.
                 if self._logger:
-                    self._logger.warning(f"codex transient stream error, letting it retry: {error_msg}")
+                    self._logger.warn(f"codex transient stream error, letting it retry: {error_msg}")
             else:
                 if self._logger:
                     self._logger.error(f"codex turn failed: {error_msg}")

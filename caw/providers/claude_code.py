@@ -50,6 +50,71 @@ _TOOL_GROUP_MAP: dict[ToolGroup, list[str]] = {
     ToolGroup.INTERACTION: ["AskUserQuestion"],
 }
 
+# -- Failed-turn detection ----------------------------------------------------
+#
+# A request that fails inside the claude CLI — API timeout, HTTP error, aborted
+# stream — does not make the CLI exit non-zero. It is reported in two places,
+# and neither used to be read here:
+#
+#   * the ``result`` event carries ``is_error: true`` and an ``error_*``
+#     ``subtype`` (with ``terminal_reason`` e.g. ``aborted_streaming``).  A
+#     healthy turn is ``is_error: false`` / ``subtype: "success"``, so this is
+#     the reliable signal;
+#   * the failure text *sometimes* also arrives as an ordinary assistant
+#     message — "Request timed out", "API Error: 500 ..." — and sometimes the
+#     turn carries no output blocks at all.
+#
+# Read literally, either shape is a turn that completed, so a caller gets a
+# successful Turn back for work that never happened, and a harness that marks a
+# task "succeeded" on a returned trajectory marks it succeeded with nothing
+# done.
+#
+# Observed in the wild on large Bedrock streaming requests: two consecutive
+# ~58-minute turns whose only output block was "Request timed out", 0 in / 0 out
+# tokens, recorded as a clean completion.
+#
+# So the result event's error flag is the primary signal, the known failure
+# texts are a fallback for a CLI that reports the error only as assistant text,
+# and a turn that keeps coming back failed raises. A stall must be a failure the
+# caller can see.
+
+#: Assistant-text prefixes the CLI uses to report a failed request.  Matched only
+#: against a turn whose *entire* output is text, as a fallback for when the
+#: result event does not carry the error flag.  Prefixes rather than exact
+#: strings because the CLI has several wordings per failure ("Request timed
+#: out", "Request timed out.", "Request timed out. Check your internet
+#: connection and proxy settings").
+_FAILURE_TEXT_PREFIXES = ("request timed out", "api error:")
+
+#: How many times to re-send a turn the CLI reported as failed with no work done.
+#: The CLI session is resumed, so a retry continues where the failure happened.
+#: Note the CLI already retries internally with backoff before reporting, so this
+#: is a second layer — hence a small number.
+FAILED_TURN_RETRIES = 2
+
+
+def _failure_text(turn: Turn) -> bool:
+    """True when the turn's whole output is one of the CLI's failure messages.
+
+    Requires the entire turn to be text: a turn that ran tools and then failed
+    is not this, and "the build failed because the request timed out upstream"
+    is a real answer, not a failure report.
+    """
+    texts = [b for b in turn.output if isinstance(b, TextBlock)]
+    if not turn.output or len(texts) != len(turn.output):
+        return False
+    return "".join(b.text for b in texts).strip().lower().startswith(_FAILURE_TEXT_PREFIXES)
+
+
+def _turn_failed(turn: Turn, *, is_error: bool, subtype: str) -> bool:
+    """True when the CLI reported *turn* as failed, by either signal.
+
+    Says nothing about whether re-sending is safe — see ``send``, which keeps a
+    failed turn that already ran tools rather than redoing them.
+    """
+    return is_error or subtype.startswith("error") or _failure_text(turn)
+
+
 # -- Subprocess registry + atexit cleanup -------------------------------------
 
 _active_processes: set[subprocess.Popen] = set()
@@ -178,6 +243,9 @@ class ClaudeCodeSession(ProviderSession):
         self._last_raw_output: str = ""
         self._step_callback = None
         self._logger: AgentLogger | None = None
+        # Error flags from the most recent turn's ``result`` event; see send().
+        self._last_is_error: bool = False
+        self._last_subtype: str = ""
 
     # ------------------------------------------------------------------
     # MCP config helpers
@@ -211,6 +279,62 @@ class ClaudeCodeSession(ProviderSession):
     # ------------------------------------------------------------------
 
     def send(self, message: str) -> Turn:
+        """Send one turn, retrying one the CLI reported as failed before it ran.
+
+        See ``_turn_failed``: a failed request does not make the CLI exit
+        non-zero, so without this a stalled or errored turn is indistinguishable
+        from a completed one.  Retries resume the same session; when they are
+        exhausted this raises, because returning a failed turn as a successful
+        one is how a stall becomes a silently "succeeded" task.
+
+        Two failures deliberately return instead of retrying: a usage limit,
+        which the caller's auto-wait loop owns (see ``detect_usage_limit``), and
+        a turn that ran tools before failing, since re-sending it would redo
+        them.
+        """
+        for attempt in range(FAILED_TURN_RETRIES + 1):
+            turn = self._send_once(message)
+
+            if not _turn_failed(turn, is_error=self._last_is_error, subtype=self._last_subtype):
+                return turn
+
+            # A usage limit is a failure the auto-wait loop handles by sleeping;
+            # it must reach the caller as a turn, not an exception.
+            if self.detect_usage_limit(turn) is not None:
+                return turn
+
+            if turn.tool_calls:
+                # Failed after doing work: the tool calls are real and re-sending
+                # would repeat them, so the partial turn stands — but say so,
+                # because it is not a clean completion.
+                if self._logger:
+                    self._logger.warn(
+                        f"claude reported a failed turn ({self._failure_reason(turn)}) after "
+                        f"{len(turn.tool_calls)} tool call(s); keeping the partial turn"
+                    )
+                return turn
+
+            remaining = FAILED_TURN_RETRIES - attempt
+            if self._logger:
+                self._logger.warn(
+                    f"claude reported a failed turn with no work done "
+                    f"({self._failure_reason(turn)}); "
+                    f"{f'retrying ({remaining} left)' if remaining else 'no retries left'}"
+                )
+        raise RuntimeError(
+            f"claude reported a failed turn {FAILED_TURN_RETRIES + 1} times with no work done "
+            f"({self._failure_reason(turn)}, session {self._session_id}); the turn did not run"
+        )
+
+    def _failure_reason(self, turn: Turn) -> str:
+        """Short description of why the last turn counted as failed, for logs."""
+        if self._last_subtype and self._last_subtype != "success":
+            return self._last_subtype
+        if self._last_is_error:
+            return "is_error"
+        return turn.result.strip()[:60] or "no output"
+
+    def _send_once(self, message: str) -> Turn:
         display = get_global_display()
         self._emit_send_preamble(message, display)
 
@@ -249,6 +373,10 @@ class ClaudeCodeSession(ProviderSession):
         usage = UsageStats()
         duration_ms = 0
         raw_lines: list[str] = []
+        # Cleared per attempt so a stream that ends without a result event cannot
+        # inherit the previous turn's verdict.
+        self._last_is_error = False
+        self._last_subtype = ""
 
         try:
             proc = subprocess.Popen(
@@ -450,6 +578,8 @@ class ClaudeCodeSession(ProviderSession):
             self._pair_tool_results(event, tool_blocks, display)
 
         elif event_type == "result":
+            self._last_is_error = bool(event.get("is_error"))
+            self._last_subtype = str(event.get("subtype") or "")
             return self._parse_usage(event), event.get("duration_ms", 0)
 
         return None
