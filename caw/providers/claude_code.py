@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -117,6 +119,8 @@ def _turn_failed(turn: Turn, *, is_error: bool, subtype: str) -> bool:
 
 # -- Subprocess registry + atexit cleanup -------------------------------------
 
+logger = logging.getLogger(__name__)
+
 _active_processes: set[subprocess.Popen] = set()
 _process_lock = threading.Lock()
 
@@ -131,13 +135,80 @@ def _unregister_process(proc: subprocess.Popen) -> None:
         _active_processes.discard(proc)
 
 
+def _group_descendants(pgid: int, leader_pid: int) -> list[tuple[int, str]]:
+    """Best-effort (Linux): live processes in group ``pgid`` other than the leader.
+
+    Returns ``(pid, cmdline)`` tuples. Used for diagnostics: after a turn
+    completes, any process here is a descendant the agent left running (e.g. a
+    shell it backgrounded via its Bash tool) that would otherwise hold our
+    stdout/stderr pipes open and wedge the streaming read.
+    """
+    found: list[tuple[int, str]] = []
+    try:
+        entries = [d for d in os.listdir("/proc") if d.isdigit()]
+    except OSError:
+        return found
+    for pid_s in entries:
+        pid = int(pid_s)
+        if pid == leader_pid:
+            continue
+        try:
+            with open(f"/proc/{pid_s}/stat", "rb") as f:
+                stat = f.read().decode("latin-1")
+            # Fields after the (parenthesised, possibly space-containing) comm:
+            # state, ppid, pgrp, ...  -> pgrp is index 2.
+            pgrp = int(stat[stat.rfind(")") + 2 :].split()[2])
+        except (OSError, ValueError, IndexError):
+            continue
+        if pgrp == pgid:
+            cmd = ""
+            try:
+                with open(f"/proc/{pid_s}/cmdline", "rb") as f:
+                    cmd = f.read().decode("latin-1").replace("\x00", " ").strip()
+            except OSError:
+                pass
+            found.append((pid, cmd[:160]))
+    return found
+
+
+def _terminate_process_group(proc: subprocess.Popen) -> list[tuple[int, str]]:
+    """SIGTERM then SIGKILL ``proc``'s whole process group; return its descendants.
+
+    ``proc`` must be started with ``start_new_session=True`` (its own group
+    leader). Killing the *group* — not just the leader — reaps any descendant the
+    agent left behind so it can't keep our pipes open and wedge the read.
+    Time-bounded, never blocks indefinitely. The returned list is a diagnostic
+    snapshot taken before the signals, i.e. who was still alive at teardown.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        return []
+    descendants = _group_descendants(pgid, proc.pid)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, OSError):
+            break
+        try:
+            proc.wait(timeout=2)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    return descendants
+
+
 def _cleanup_processes() -> None:
-    """Kill all tracked subprocesses at interpreter exit."""
+    """Kill all tracked subprocess groups at interpreter exit."""
     with _process_lock:
         procs = list(_active_processes)
     for proc in procs:
         try:
-            proc.kill()
+            _terminate_process_group(proc)
         except OSError:
             pass
 
@@ -390,6 +461,7 @@ class ClaudeCodeSession(ProviderSession):
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=self._cwd,
+                start_new_session=True,  # own process group -> reap the whole tree
             )
         except FileNotFoundError:
             raise RuntimeError("claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code")
@@ -401,6 +473,7 @@ class ClaudeCodeSession(ProviderSession):
             proc.stdin.close()  # type: ignore[union-attr]
 
             # Stream stdout line by line
+            saw_result = False
             for line in proc.stdout:  # type: ignore[union-attr]
                 line = line.rstrip("\n")
                 raw_lines.append(line)
@@ -415,21 +488,42 @@ class ClaudeCodeSession(ProviderSession):
                 result = self._process_event(event, blocks, tool_blocks, display)
                 if result is not None:
                     usage, duration_ms = result
+                    saw_result = True
                 if self._step_callback and blocks:
                     self._step_callback(list(blocks))
-
-            # Read stderr after stdout is exhausted
-            stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
-            proc.wait()
+                if saw_result:
+                    # Turn is logically complete (terminal 'result' event). Do NOT
+                    # keep reading until stdout EOF: a descendant the agent left
+                    # running (e.g. a shell backgrounded via its Bash tool) can
+                    # inherit and hold this pipe open, blocking the read forever.
+                    # Stop here and reap the whole process group below.
+                    break
 
             self._last_raw_output = "\n".join(raw_lines)
 
-            if proc.returncode != 0 and not raw_lines:
-                raise RuntimeError(f"claude CLI exited with code {proc.returncode}: {stderr}")
+            if saw_result:
+                # The CLI is killed below, so its exit code is ours and says
+                # nothing; the result event already established the outcome.
+                survivors = _terminate_process_group(proc)
+                if survivors:
+                    logger.warning(
+                        "claude turn complete but %d descendant(s) still alive in the "
+                        "process group (reaped) -- these would have wedged the read: %s",
+                        len(survivors),
+                        "; ".join(f"[{pid}] {cmd}" for pid, cmd in survivors),
+                    )
+                else:
+                    logger.debug("claude turn complete; process group clean")
+            else:
+                # No terminal result event: natural EOF or an early exit. The
+                # process ended on its own, so its status is real.
+                stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
+                proc.wait()
+                if proc.returncode != 0 and not raw_lines:
+                    raise RuntimeError(f"claude CLI exited with code {proc.returncode}: {stderr}")
 
         except (KeyboardInterrupt, Exception):
-            proc.kill()
-            proc.wait()
+            _terminate_process_group(proc)
             raise
         finally:
             _unregister_process(proc)

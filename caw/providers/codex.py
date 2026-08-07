@@ -39,6 +39,10 @@ from caw.models import (
 from caw.pricing import compute_cost
 from caw.provider import Provider, ProviderSession
 
+# Reuse the process-group teardown shared with the claude_code provider so a
+# leftover descendant can't hold our stdout pipe open and wedge the read.
+from caw.providers.claude_code import _terminate_process_group
+
 logger = logging.getLogger(__name__)
 
 # -- Usage-limit detection ----------------------------------------------------
@@ -118,12 +122,12 @@ def _unregister_process(proc: subprocess.Popen) -> None:
 
 
 def _cleanup_processes() -> None:
-    """Kill all tracked subprocesses at interpreter exit."""
+    """Kill all tracked subprocess groups at interpreter exit."""
     with _process_lock:
         procs = list(_active_processes)
     for proc in procs:
         try:
-            proc.kill()
+            _terminate_process_group(proc)
         except OSError:
             pass
 
@@ -302,6 +306,7 @@ class CodexSession(ProviderSession):
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=self._cwd,
+                start_new_session=True,  # own process group -> reap the whole tree
             )
         except FileNotFoundError:
             raise RuntimeError("codex CLI not found. Install it with: npm install -g @openai/codex")
@@ -309,6 +314,7 @@ class CodexSession(ProviderSession):
         _register_process(proc)
         try:
             # Stream stdout line by line
+            saw_result = False
             for line in proc.stdout:  # type: ignore[union-attr]
                 line = line.rstrip("\n")
                 raw_lines.append(line)
@@ -323,21 +329,40 @@ class CodexSession(ProviderSession):
                 result = self._process_event(event, blocks, tool_blocks, display)
                 if result is not None:
                     usage = result
+                    saw_result = True
                 if self._step_callback and blocks:
                     self._step_callback(list(blocks))
-
-            # Read stderr after stdout is exhausted
-            stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
-            proc.wait()
+                if saw_result:
+                    # Turn complete (terminal 'turn.completed' event). Stop reading
+                    # rather than wait for stdout EOF, which a descendant the agent
+                    # left running could hold open forever; reap the group below.
+                    break
 
             self._last_raw_output = "\n".join(raw_lines)
 
-            if proc.returncode != 0 and not raw_lines:
-                raise RuntimeError(f"codex CLI exited with code {proc.returncode}: {stderr}")
+            if saw_result:
+                # The CLI is killed below, so its exit code is ours and says
+                # nothing; turn.completed already established the outcome.
+                survivors = _terminate_process_group(proc)
+                if survivors:
+                    logger.warning(
+                        "codex turn complete but %d descendant(s) still alive in the "
+                        "process group (reaped) -- these would have wedged the read: %s",
+                        len(survivors),
+                        "; ".join(f"[{pid}] {cmd}" for pid, cmd in survivors),
+                    )
+                else:
+                    logger.debug("codex turn complete; process group clean")
+            else:
+                # No terminal event: natural EOF or an early exit. The process
+                # ended on its own, so its status is real.
+                stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
+                proc.wait()
+                if proc.returncode != 0 and not raw_lines:
+                    raise RuntimeError(f"codex CLI exited with code {proc.returncode}: {stderr}")
 
         except (KeyboardInterrupt, Exception):
-            proc.kill()
-            proc.wait()
+            _terminate_process_group(proc)
             raise
         finally:
             _unregister_process(proc)
