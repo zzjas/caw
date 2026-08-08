@@ -171,7 +171,7 @@ def _group_descendants(pgid: int, leader_pid: int) -> list[tuple[int, str]]:
     return found
 
 
-def _terminate_process_group(proc: subprocess.Popen) -> list[tuple[int, str]]:
+def _terminate_process_group(proc: subprocess.Popen, pgid: int | None = None) -> list[tuple[int, str]]:
     """SIGTERM then SIGKILL ``proc``'s whole process group; return its descendants.
 
     ``proc`` must be started with ``start_new_session=True`` (its own group
@@ -179,11 +179,17 @@ def _terminate_process_group(proc: subprocess.Popen) -> list[tuple[int, str]]:
     agent left behind so it can't keep our pipes open and wedge the read.
     Time-bounded, never blocks indefinitely. The returned list is a diagnostic
     snapshot taken before the signals, i.e. who was still alive at teardown.
+
+    Pass *pgid* explicitly when the leader may already have been reaped: a
+    ``wait()``/``poll()`` that collected it makes ``getpgid`` fail, and the
+    surviving descendants would then never be signalled. ``start_new_session``
+    makes the leader its own group leader, so the group id is just ``proc.pid``.
     """
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, OSError):
-        return []
+    if pgid is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, OSError):
+            return []
     descendants = _group_descendants(pgid, proc.pid)
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:

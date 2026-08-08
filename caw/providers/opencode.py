@@ -42,6 +42,10 @@ from caw.models import (
 from caw.pricing import compute_cost
 from caw.provider import Provider, ProviderSession
 
+# Reuse the process-group teardown shared with the claude_code provider so a
+# leftover descendant can't hold our pipes open and wedge the read.
+from caw.providers.claude_code import _terminate_process_group
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,17 +66,66 @@ def _unregister_process(proc: subprocess.Popen) -> None:
 
 
 def _cleanup_processes() -> None:
-    """Kill all tracked subprocesses at interpreter exit."""
+    """Kill all tracked subprocess groups at interpreter exit."""
     with _process_lock:
         procs = list(_active_processes)
     for proc in procs:
         try:
-            proc.kill()
+            _terminate_process_group(proc)
         except OSError:
             pass
 
 
 atexit.register(_cleanup_processes)
+
+
+# -- Turn teardown ------------------------------------------------------------
+#
+# Unlike claude and codex, `opencode run --format json` has no terminal event to
+# stop reading on: it emits only step_start / text / reasoning / tool_use /
+# step_finish / error, and step_finish fires once per model *step*, so a turn
+# with tool calls has several (they're accumulated). Its own "session.status →
+# idle" signal is consumed internally by the CLI and never written to stdout.
+#
+# So the only "turn over" signal here is the CLI process exiting -- and that is
+# exactly what a descendant the agent left running (e.g. a shell backgrounded
+# via its Bash tool) decouples from our read: the descendant inherited our
+# stdout/stderr pipes, so the CLI can exit while the pipes stay open and the
+# read blocks forever.
+#
+# Rather than guess at an early stop point and risk truncating a turn, watch for
+# the CLI exiting and reap its process group a grace period later. Killing the
+# descendants closes the last write end, so the read loop drains everything the
+# CLI actually wrote and then sees a genuine EOF. Because the watchdog keys off
+# the CLI's exit and not off our read position, it also unblocks a stderr read
+# held open by the same descendant.
+
+#: How long after the CLI exits to wait for the read loop to finish on its own
+#: before reaping the group. Only elapses when something is holding a pipe open.
+_REAP_GRACE_S = 2.0
+
+
+def _reap_group_after_exit(proc: subprocess.Popen, pgid: int, done: threading.Event) -> None:
+    """Wait for *proc* to exit, then reap its group unless *done* is already set.
+
+    Runs on a daemon thread for the duration of one turn. ``pgid`` is passed
+    explicitly because waiting here reaps the leader, after which ``getpgid``
+    can no longer resolve the group.
+    """
+    try:
+        proc.wait()
+    except Exception:  # pragma: no cover - defensive
+        return
+    if done.wait(_REAP_GRACE_S):
+        return  # read loop already finished normally; nothing to reap
+    survivors = _terminate_process_group(proc, pgid)
+    if survivors:
+        logger.warning(
+            "opencode exited but %d descendant(s) still alive in the process group "
+            "(reaped) -- these were holding our pipes open: %s",
+            len(survivors),
+            "; ".join(f"[{pid}] {cmd}" for pid, cmd in survivors),
+        )
 
 
 # -- Binary discovery ---------------------------------------------------------
@@ -307,6 +360,7 @@ class OpencodeSession(ProviderSession):
                 text=True,
                 env=env,
                 cwd=self._cwd,
+                start_new_session=True,  # own process group -> reap the whole tree
             )
         except FileNotFoundError:
             raise RuntimeError(
@@ -314,6 +368,16 @@ class OpencodeSession(ProviderSession):
             )
 
         _register_process(proc)
+        # start_new_session makes the child its own process-group leader, so the
+        # group id is its pid -- captured now because it stays usable after a
+        # wait() has reaped the leader.
+        pgid = proc.pid
+        done = threading.Event()
+        threading.Thread(
+            target=_reap_group_after_exit,
+            args=(proc, pgid, done),
+            daemon=True,
+        ).start()
         try:
             for line in proc.stdout:  # type: ignore[union-attr]
                 line = line.rstrip("\n")
@@ -343,10 +407,12 @@ class OpencodeSession(ProviderSession):
                 raise RuntimeError(f"opencode CLI exited with code {proc.returncode}: {stderr}")
 
         except (KeyboardInterrupt, Exception):
-            proc.kill()
-            proc.wait()
+            _terminate_process_group(proc, pgid)
             raise
         finally:
+            # Set only once every read is done, so the watchdog also covers a
+            # stderr read held open by the same descendant.
+            done.set()
             _unregister_process(proc)
 
         self._has_sent = True
