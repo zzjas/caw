@@ -414,12 +414,24 @@ class ClaudeCodeSession(ProviderSession):
         )
 
     def _failure_reason(self, turn: Turn) -> str:
-        """Short description of why the last turn counted as failed, for logs."""
+        """Short description of why the turn counted as failed.
+
+        The result event's subtype leads, but it is coarse — a timeout and a
+        provider 500 are both ``error_during_execution``. When the CLI *also*
+        said which, as one of its known failure wordings in the assistant text,
+        that goes on the end: a caller classifying the failure (retry? wait?
+        give up?) needs the specific half, and the two together are still one
+        short line.
+        """
+        parts = []
         if self._last_subtype and self._last_subtype != "success":
-            return self._last_subtype
-        if self._last_is_error:
-            return "is_error"
-        return turn.result.strip()[:60] or "no output"
+            parts.append(self._last_subtype)
+        elif self._last_is_error:
+            parts.append("is_error")
+        text = turn.result.strip()[:60]
+        if text.lower().startswith(_FAILURE_TEXT_PREFIXES):
+            parts.append(text)
+        return ": ".join(parts) or text or "no output"
 
     def _send_once(self, message: str) -> Turn:
         display = get_global_display()

@@ -255,3 +255,34 @@ class TestFailureReachesTheCaller:
 
         monkeypatch.setattr(session, "_send_once", fake_send_once)
         assert session.send("go").failure_reason is None
+
+
+class TestFailureReasonPrecision:
+    """A subtype alone cannot be classified: a timeout and a provider 500 are
+    both `error_during_execution`. When the CLI named the specific failure in
+    its assistant text, the reason carries both."""
+
+    def test_the_specific_wording_is_kept_alongside_the_subtype(self):
+        session = _session()
+        session._last_is_error = True
+        session._last_subtype = "error_during_execution"
+        reason = session._failure_reason(_turn(ToolUse(id="1", name="Bash"), TextBlock(text="Request timed out")))
+        assert "error_during_execution" in reason
+        assert "Request timed out" in reason
+
+    def test_a_real_answer_is_not_mistaken_for_a_failure_report(self):
+        session = _session()
+        session._last_is_error = True
+        session._last_subtype = "error_during_execution"
+        answer = "The build failed because the request timed out upstream."
+        assert session._failure_reason(_turn(TextBlock(text=answer))) == "error_during_execution"
+
+    def test_the_text_alone_is_the_reason_when_there_is_no_subtype(self):
+        session = _session()
+        session._last_subtype = "success"
+        assert session._failure_reason(_turn(TextBlock(text="Request timed out"))) == "Request timed out"
+
+    def test_a_turn_with_nothing_to_say_still_gives_a_reason(self):
+        session = _session()
+        session._last_subtype = "success"
+        assert session._failure_reason(_turn()) == "no output"
