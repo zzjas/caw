@@ -51,13 +51,20 @@ Trajectory
 │   ├── output: list[TextBlock | ThinkingBlock | ToolUse]
 │   │   └── ToolUse.subagent_trajectory: Trajectory | None
 │   ├── usage: UsageStats
-│   └── duration_ms: int
+│   ├── duration_ms: int
+│   └── failure_reason: str | None   # set only on a turn the CLI reported failed
 ├── usage: UsageStats        # this agent's own usage
 └── total_usage: UsageStats  # own + all nested subagents (recursive)
 ```
 
 Handy properties: `traj.result` (final text), `traj.num_turns`, `traj.total_tool_calls`,
 `traj.subagent_trajectories`, `traj.is_complete`, and `traj.is_usage_limited`.
+
+`traj.ended_on_failure` / `traj.failure_reason` answer the outcome question — *did this run
+end on a failure* — by reading the last turn. A mid-run turn that failed and was retried never
+reaches the trajectory, and a usage-limited turn the auto-wait loop resumed past is followed by
+the clean turn that replaced it, so both correctly read as no failure. `traj.failed_turns` is
+the every-turn view, for auditing.
 
 ## Turn
 
@@ -66,6 +73,14 @@ content blocks, the `usage` for that turn, and `duration_ms`. Convenience access
 
 - `turn.result` — the last text block.
 - `turn.tool_calls` — the [`ToolUse`][caw.ToolUse] blocks in this turn.
+- `turn.failed` / `turn.failure_reason` — whether the CLI reported this turn as failed.
+
+`failure_reason` is `None` on a normal turn, and a provider that *raises* on failure never
+sets it. It exists for the turns a provider deliberately **returns** while knowing they
+failed, which is the only case where the caller cannot otherwise tell: a turn that failed
+*after* running tools is kept rather than re-sent (re-sending would repeat those calls), and a
+usage-limited turn is handed back for the auto-wait loop to resume. Check it before recording
+an outcome from a returned turn — a partial turn otherwise looks exactly like a complete one.
 
 Content blocks are one of [`TextBlock`][caw.TextBlock], [`ThinkingBlock`][caw.ThinkingBlock],
 or [`ToolUse`][caw.ToolUse] (which may carry a nested `subagent_trajectory`).

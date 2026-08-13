@@ -98,14 +98,17 @@ class JsonlWriter:
                 self.append(result_entry)
 
         # Turn-end stats
-        self.append(
-            {
-                "type": "turn_end",
-                "turn_index": turn_index,
-                "usage": turn.usage.to_dict(),
-                "duration_ms": turn.duration_ms,
-            }
-        )
+        turn_end: dict[str, Any] = {
+            "type": "turn_end",
+            "turn_index": turn_index,
+            "usage": turn.usage.to_dict(),
+            "duration_ms": turn.duration_ms,
+        }
+        # Only on a turn the CLI reported as failed, so a consumer tailing this
+        # stream learns it at the same moment the trajectory would tell it.
+        if turn.failure_reason is not None:
+            turn_end["failure_reason"] = turn.failure_reason
+        self.append(turn_end)
 
 
 class SessionStore:

@@ -183,3 +183,75 @@ class TestLoggerSurface:
             session.send("go")
         assert len(logger.warnings) == FAILED_TURN_RETRIES + 1
         assert "error_during_execution" in logger.warnings[0]
+
+
+class TestFailureReachesTheCaller:
+    """The two turns `send` deliberately returns while knowing they failed.
+
+    Both used to come back looking exactly like a clean turn: the failure
+    existed only as a log line, so a harness deriving an outcome from the
+    return value derived a success. That is how a run that timed out mid-way,
+    having done half its work and written none of it, was recorded as having
+    done the job.
+    """
+
+    def test_a_kept_partial_turn_says_it_failed(self, monkeypatch):
+        session = _session()
+
+        def fake_send_once(message: str) -> Turn:
+            session._last_is_error = True
+            session._last_subtype = "error_during_execution"
+            return _turn(ToolUse(id="1", name="Bash"), TextBlock(text="Request timed out"))
+
+        monkeypatch.setattr(session, "_send_once", fake_send_once)
+        turn = session.send("go")
+        assert turn.failed
+        # Names the cause and that work was done before it — the two things a
+        # caller needs to decide what the partial turn is worth.
+        assert "error_during_execution" in turn.failure_reason
+        assert "1 tool call(s)" in turn.failure_reason
+
+    def test_a_usage_limited_turn_says_it_failed(self, monkeypatch):
+        session = _session()
+
+        def fake_send_once(message: str) -> Turn:
+            session._last_is_error = True
+            session._last_subtype = "error_during_execution"
+            return _turn(TextBlock(text="You've hit your session limit · resets 7:10pm (America/Chicago)"))
+
+        monkeypatch.setattr(session, "_send_once", fake_send_once)
+        turn = session.send("go")
+        assert turn.failed
+        assert "usage limit" in turn.failure_reason
+
+    def test_a_clean_turn_says_nothing(self, monkeypatch):
+        session = _session()
+
+        def fake_send_once(message: str) -> Turn:
+            session._last_subtype = "success"
+            return _turn(TextBlock(text="ok"))
+
+        monkeypatch.setattr(session, "_send_once", fake_send_once)
+        turn = session.send("go")
+        assert not turn.failed
+        assert turn.failure_reason is None
+
+    def test_a_retried_turn_returns_clean(self, monkeypatch):
+        """The failed attempt is discarded, never returned — so a transient
+        failure the retry recovered from must not leave a mark on the turn the
+        caller gets."""
+        session = _session()
+        attempts = []
+
+        def fake_send_once(message: str) -> Turn:
+            attempts.append(message)
+            if len(attempts) == 1:
+                session._last_is_error = True
+                session._last_subtype = "error_during_execution"
+                return _turn()
+            session._last_is_error = False
+            session._last_subtype = "success"
+            return _turn(TextBlock(text="ok"))
+
+        monkeypatch.setattr(session, "_send_once", fake_send_once)
+        assert session.send("go").failure_reason is None

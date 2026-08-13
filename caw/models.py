@@ -169,6 +169,19 @@ class Turn:
     output: list[ContentBlock] = field(default_factory=list)
     usage: UsageStats = field(default_factory=UsageStats)
     duration_ms: int = 0
+    #: Why the CLI reported this turn as failed, when it did — ``None`` for a
+    #: turn that completed normally.
+    #:
+    #: A provider that *raises* on failure never sets this; it exists for the
+    #: turns a provider deliberately **returns** while knowing they failed,
+    #: which is the only case where the caller cannot tell. Today that is
+    #: ``ClaudeCodeSession.send``: a turn that failed after running tools is
+    #: kept rather than re-sent (re-sending would repeat those calls), and a
+    #: usage-limited turn is handed back for the auto-wait loop to resume.
+    #: Both used to come back indistinguishable from a clean turn — the
+    #: failure existed only as a log line — so a caller deriving an outcome
+    #: from the return value derived a success.
+    failure_reason: str | None = None
 
     @property
     def result(self) -> str:
@@ -179,17 +192,27 @@ class Turn:
         return ""
 
     @property
+    def failed(self) -> bool:
+        """Whether the CLI reported this turn as failed. See ``failure_reason``."""
+        return self.failure_reason is not None
+
+    @property
     def tool_calls(self) -> list[ToolUse]:
         """All tool calls made during this turn."""
         return [b for b in self.output if isinstance(b, ToolUse)]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "input": self.input,
             "output": [_block_to_dict(b) for b in self.output],
             "usage": self.usage.to_dict(),
             "duration_ms": self.duration_ms,
         }
+        # Omitted when absent, like ToolUse.is_error — a clean turn serialises
+        # byte-for-byte as it did before this field existed.
+        if self.failure_reason is not None:
+            d["failure_reason"] = self.failure_reason
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Turn:
@@ -198,6 +221,7 @@ class Turn:
             output=[_block_from_dict(b) for b in d.get("output", [])],
             usage=UsageStats.from_dict(d.get("usage", {})),
             duration_ms=d.get("duration_ms", 0),
+            failure_reason=d.get("failure_reason"),
         )
 
 
@@ -237,6 +261,31 @@ class Trajectory:
     @property
     def total_tool_calls(self) -> int:
         return sum(len(t.tool_calls) for t in self.turns)
+
+    @property
+    def failure_reason(self) -> str | None:
+        """Why the session's **last** turn failed, or ``None`` if it didn't.
+
+        The question a caller recording an outcome has: not "did anything ever
+        go wrong" but "did this run end on a failure". A mid-run turn that
+        failed and was retried never reaches the trajectory, and a
+        usage-limited turn that the auto-wait loop resumed past is followed by
+        the clean turn that replaced it — so both correctly read ``None`` here.
+        """
+        return self.turns[-1].failure_reason if self.turns else None
+
+    @property
+    def ended_on_failure(self) -> bool:
+        """Whether the last turn failed. See ``failure_reason``."""
+        return self.failure_reason is not None
+
+    @property
+    def failed_turns(self) -> list[Turn]:
+        """Every turn the CLI reported as failed, in order.
+
+        For auditing a whole run; ``ended_on_failure`` is the outcome question.
+        """
+        return [t for t in self.turns if t.failed]
 
     @property
     def total_usage(self) -> UsageStats:

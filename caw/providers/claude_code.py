@@ -372,6 +372,11 @@ class ClaudeCodeSession(ProviderSession):
         which the caller's auto-wait loop owns (see ``detect_usage_limit``), and
         a turn that ran tools before failing, since re-sending it would redo
         them.
+
+        **Both of those carry the failure out on ``Turn.failure_reason``.** The
+        warning below is for a human tailing the log; the field is for the
+        caller, which may be recording an outcome from this return value and
+        otherwise cannot tell a kept-partial turn from a clean one.
         """
         for attempt in range(FAILED_TURN_RETRIES + 1):
             turn = self._send_once(message)
@@ -382,17 +387,18 @@ class ClaudeCodeSession(ProviderSession):
             # A usage limit is a failure the auto-wait loop handles by sleeping;
             # it must reach the caller as a turn, not an exception.
             if self.detect_usage_limit(turn) is not None:
+                turn.failure_reason = f"usage limit ({self._failure_reason(turn)})"
                 return turn
 
             if turn.tool_calls:
                 # Failed after doing work: the tool calls are real and re-sending
                 # would repeat them, so the partial turn stands — but say so,
                 # because it is not a clean completion.
+                turn.failure_reason = (
+                    f"{self._failure_reason(turn)} after {len(turn.tool_calls)} tool call(s); partial turn kept"
+                )
                 if self._logger:
-                    self._logger.warn(
-                        f"claude reported a failed turn ({self._failure_reason(turn)}) after "
-                        f"{len(turn.tool_calls)} tool call(s); keeping the partial turn"
-                    )
+                    self._logger.warn(f"claude reported a failed turn: {turn.failure_reason}")
                 return turn
 
             remaining = FAILED_TURN_RETRIES - attempt
