@@ -246,11 +246,15 @@ class CodexSession(ProviderSession):
         if not self._has_sent and self._system_prompt:
             prompt = f"{self._system_prompt}\n\n{message}"
 
-        # Build sandbox flags
+        # Build sandbox flags. `--full-auto` used to accompany `--sandbox` here;
+        # `codex exec` no longer accepts it and exits 2 with "unexpected
+        # argument '--full-auto' found" before doing any work, so every
+        # restrictive sandbox was unusable. `--sandbox` alone is the current
+        # spelling (the TUI path below already dropped it for the same reason).
         if self._sandbox is None or self._sandbox == "danger-full-access":
             sandbox_flags = ["--dangerously-bypass-approvals-and-sandbox"]
         else:
-            sandbox_flags = ["--full-auto", "--sandbox", self._sandbox]
+            sandbox_flags = ["--sandbox", self._sandbox]
 
         # Build command
         if not self._has_sent:

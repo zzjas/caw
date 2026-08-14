@@ -171,3 +171,38 @@ class TestUnknownOptions:
             with caplog.at_level(logging.WARNING, logger="caw.provider"):
                 provider.start_session(mcp_servers=[], extra_config={"a": 1})
             assert "extra_config" in caplog.text
+
+
+class TestSandboxFlags:
+    """`codex exec` dropped `--full-auto`; emitting it exits 2 before any work."""
+
+    def _cmd(self, monkeypatch, **kwargs):
+        seen = {}
+
+        def fake_popen(cmd, **kw):
+            seen["cmd"] = cmd
+            return _FakeProc()
+
+        monkeypatch.setattr("caw.providers.codex.subprocess.Popen", fake_popen)
+        CodexProvider().start_session(mcp_servers=[], **kwargs).send("hi")
+        return seen["cmd"]
+
+    def test_restrictive_sandbox_does_not_pass_full_auto(self, monkeypatch):
+        cmd = self._cmd(monkeypatch, sandbox="workspace-write")
+        assert "--full-auto" not in cmd
+        assert cmd[cmd.index("--sandbox") + 1] == "workspace-write"
+
+    def test_read_only_sandbox_does_not_pass_full_auto(self, monkeypatch):
+        cmd = self._cmd(monkeypatch, sandbox="read-only")
+        assert "--full-auto" not in cmd
+        assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+
+    def test_no_sandbox_still_bypasses(self, monkeypatch):
+        cmd = self._cmd(monkeypatch)
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--sandbox" not in cmd
+
+    def test_danger_full_access_bypasses(self, monkeypatch):
+        cmd = self._cmd(monkeypatch, sandbox="danger-full-access")
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--sandbox" not in cmd
