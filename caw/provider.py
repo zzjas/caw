@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from caw.logger import AgentLogger
 from caw.models import InteractiveResult, MCPServer, ModelTier, ToolGroup, Trajectory, Turn
 
 if TYPE_CHECKING:
     from caw.health import AuthSignal, ProviderHealth
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderSession(ABC):
@@ -90,11 +94,56 @@ class ProviderSession(ABC):
 class Provider(ABC):
     """ABC that each coding agent backend implements."""
 
+    #: Options every provider accepts. ``session_id`` and the tool-restriction
+    #: keys are injected by the Agent layer rather than passed by users.
+    SESSION_OPTIONS: ClassVar[frozenset[str]] = frozenset(
+        {"model", "system_prompt", "session_id", "reasoning", "cwd"}
+    )
+
+    #: Options this provider understands on top of `SESSION_OPTIONS`. Anything
+    #: an Agent is given that appears in neither set is reported by
+    #: `warn_unknown_options` instead of being dropped in silence.
+    EXTRA_SESSION_OPTIONS: ClassVar[frozenset[str]] = frozenset()
+
     @property
     @abstractmethod
     def name(self) -> str:
         """Provider identifier (e.g. 'claude_code', 'codex')."""
         ...
+
+    def warn_unknown_options(self, kwargs: dict[str, Any]) -> None:
+        """Log a warning for session options this provider will ignore.
+
+        Provider sessions read the options they know by name out of
+        ``**kwargs``, so anything misspelled — or supported by one backend and
+        not another — used to vanish without a trace. That is a bad failure
+        mode for a library whose pitch is swapping providers: the call keeps
+        working and quietly stops doing what it says. Now it is visible.
+        """
+        known = self.SESSION_OPTIONS | self.EXTRA_SESSION_OPTIONS
+        unknown = sorted(k for k in kwargs if k not in known)
+        if unknown:
+            logger.warning(
+                "%s: ignoring unsupported session option(s): %s — this backend "
+                "does not implement them, so they will have no effect.",
+                self.name,
+                ", ".join(unknown),
+            )
+
+    def resolve_cwd(self, cwd: Any) -> str | None:
+        """Validate a working directory before it reaches ``subprocess``.
+
+        Checked here rather than left to `subprocess.Popen`, because a missing
+        directory makes Popen raise `FileNotFoundError` — which every provider
+        catches and reports as "the CLI is not installed". A typo in a path
+        would send you off reinstalling a CLI you already have.
+        """
+        if cwd is None:
+            return None
+        path = os.fspath(cwd)
+        if not os.path.isdir(path):
+            raise NotADirectoryError(f"cwd is not a directory: {path}")
+        return path
 
     def resolve_model(self, tier: ModelTier) -> str | None:
         """Translate a `ModelTier` into a concrete model identifier, if needed.

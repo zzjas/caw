@@ -161,6 +161,7 @@ class OpencodeSession(ProviderSession):
         session_id: str | None = None,
         reasoning: str | None = None,
         disabled_tools: list[str] | None = None,
+        cwd: str | None = None,
     ) -> None:
         # caw-side bookkeeping id; opencode generates its own session id which
         # we capture from the first event stream and reuse on subsequent turns.
@@ -171,6 +172,8 @@ class OpencodeSession(ProviderSession):
         self._system_prompt = system_prompt
         self._reasoning = reasoning
         self._disabled_tools = disabled_tools or []
+        # opencode resolves its project context from the working directory.
+        self._cwd = cwd
         self._created_at = datetime.now(timezone.utc).isoformat()
         self._has_sent = False
         self._turns: list[Turn] = []
@@ -303,6 +306,7 @@ class OpencodeSession(ProviderSession):
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
+                cwd=self._cwd,
             )
         except FileNotFoundError:
             raise RuntimeError(
@@ -557,6 +561,9 @@ class OpencodeSession(ProviderSession):
 class OpencodeProvider(Provider):
     """Provider that delegates to the ``opencode`` CLI."""
 
+    # `disabled_tools` arrives from resolve_tool_restrictions.
+    EXTRA_SESSION_OPTIONS = frozenset({"disabled_tools"})
+
     @property
     def name(self) -> str:
         return "opencode"
@@ -598,6 +605,7 @@ class OpencodeProvider(Provider):
         return {"disabled_tools": all_tools}
 
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> OpencodeSession:
+        self.warn_unknown_options(kwargs)
         return OpencodeSession(
             mcp_servers=mcp_servers,
             model=kwargs.get("model"),
@@ -605,6 +613,7 @@ class OpencodeProvider(Provider):
             session_id=kwargs.get("session_id"),
             reasoning=kwargs.get("reasoning"),
             disabled_tools=kwargs.get("disabled_tools"),
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
         )
 
     def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
@@ -619,6 +628,7 @@ class OpencodeProvider(Provider):
         trajectory: Trajectory | None = None,
         **kwargs: Any,
     ) -> OpencodeSession:
+        self.warn_unknown_options(kwargs)
         session = OpencodeSession(
             mcp_servers=mcp_servers,
             model=kwargs.get("model") or (trajectory.model if trajectory else None),
@@ -626,6 +636,7 @@ class OpencodeProvider(Provider):
             session_id=session_id,
             reasoning=(trajectory.reasoning if trajectory else None) or None,
             disabled_tools=kwargs.get("disabled_tools"),
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
         )
         # The opencode CLI resumes via `--session <opencode_session_id>`.
         session._opencode_session_id = resume_key
@@ -686,4 +697,10 @@ class OpencodeProvider(Provider):
                 except OSError:
                     pass
 
-        return drive_interactive_pty(cmd, env=env, capture_bytes=capture_bytes, on_exit=_cleanup)
+        return drive_interactive_pty(
+            cmd,
+            env=env,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
+            capture_bytes=capture_bytes,
+            on_exit=_cleanup,
+        )

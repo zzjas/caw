@@ -20,6 +20,7 @@ def drive_interactive_pty(
     cmd: list[str],
     *,
     env: dict[str, str] | None = None,
+    cwd: str | None = None,
     capture_bytes: int = 0,
     on_exit: Callable[[], None] | None = None,
 ) -> InteractiveResult:
@@ -29,6 +30,9 @@ def drive_interactive_pty(
         cmd: argv to ``execvp`` in the child.
         env: extra environment variables to set in the child (merged on top of
             the inherited environment; ``None`` means inherit unchanged).
+        cwd: working directory for the child (``None`` means inherit). Every
+            agent CLI takes its project/workspace root from here, so the
+            headless and interactive paths have to honor it alike.
         capture_bytes: maximum bytes of child output to retain (tail).  ``0``
             (default) keeps everything.
         on_exit: optional callback run in the ``finally`` block (e.g. to unlink
@@ -69,6 +73,8 @@ def drive_interactive_pty(
         if env:
             for k, v in env.items():
                 os.environ[k] = v
+        if cwd:
+            os.chdir(cwd)
         os.execvp(cmd[0], cmd)
 
     # Parent.

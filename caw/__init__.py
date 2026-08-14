@@ -1,6 +1,6 @@
 """caw - Coding Agent Wrapper."""
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
 
 from caw.agent import (
     Agent,

@@ -110,6 +110,7 @@ class ClaudePSession(ClaudeCodeSession):
         session_id: str | None = None,
         disallowed_tools: list[str] | None = None,
         reasoning: str | None = None,
+        cwd: str | None = None,
         *,
         timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
         strip_provider_env: bool = True,
@@ -121,6 +122,7 @@ class ClaudePSession(ClaudeCodeSession):
             session_id=session_id,
             disallowed_tools=disallowed_tools,
             reasoning=reasoning,
+            cwd=cwd,
         )
         self._timeout_sec = timeout_sec
         self._strip_provider_env = strip_provider_env
@@ -323,7 +325,9 @@ class ClaudePSession(ClaudeCodeSession):
         master, slave = pty.openpty()
         start = time.time()
         try:
-            proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, env=env, cwd=os.getcwd())
+            proc = subprocess.Popen(
+                cmd, stdin=slave, stdout=slave, stderr=slave, env=env, cwd=self._cwd or os.getcwd()
+            )
         except FileNotFoundError:
             os.close(master)
             os.close(slave)
@@ -389,13 +393,22 @@ class ClaudePSession(ClaudeCodeSession):
 class ClaudePProvider(ClaudeCodeProvider):
     """Provider that drives the interactive ``claude`` TUI (subscription backend)."""
 
+    # This backend drives a TUI rather than a headless run, so it carries two
+    # options of its own on top of what claude_code accepts.
+    EXTRA_SESSION_OPTIONS = ClaudeCodeProvider.EXTRA_SESSION_OPTIONS | {
+        "timeout_sec",
+        "strip_provider_env",
+    }
+
     @property
     def name(self) -> str:
         return "claudep"
 
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> ClaudePSession:
+        self.warn_unknown_options(kwargs)
         return ClaudePSession(
             mcp_servers=mcp_servers,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
             model=kwargs.get("model"),
             system_prompt=kwargs.get("system_prompt"),
             session_id=kwargs.get("session_id"),
@@ -414,8 +427,10 @@ class ClaudePProvider(ClaudeCodeProvider):
         trajectory: Trajectory | None = None,
         **kwargs: Any,
     ) -> ClaudePSession:
+        self.warn_unknown_options(kwargs)
         session = ClaudePSession(
             mcp_servers=mcp_servers,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
             model=kwargs.get("model") or (trajectory.model if trajectory else None),
             system_prompt=(trajectory.system_prompt if trajectory else None) or None,
             session_id=resume_key,

@@ -227,6 +227,7 @@ class ClaudeCodeSession(ProviderSession):
         session_id: str | None = None,
         disallowed_tools: list[str] | None = None,
         reasoning: str | None = None,
+        cwd: str | None = None,
     ) -> None:
         self._session_id = session_id or str(uuid.uuid4())
         self._model = model
@@ -234,6 +235,9 @@ class ClaudeCodeSession(ProviderSession):
         self._system_prompt = system_prompt
         self._disallowed_tools = disallowed_tools
         self._reasoning = reasoning
+        # claude reads CLAUDE.md and resolves relative paths from its working
+        # directory, so this is what points a session at a project.
+        self._cwd = cwd
         self._created_at = datetime.now(timezone.utc).isoformat()
         self._has_sent = False
         self._turns: list[Turn] = []
@@ -385,6 +389,7 @@ class ClaudeCodeSession(ProviderSession):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                cwd=self._cwd,
             )
         except FileNotFoundError:
             raise RuntimeError("claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code")
@@ -674,6 +679,9 @@ class ClaudeCodeSession(ProviderSession):
 class ClaudeCodeProvider(Provider):
     """Provider that delegates to the ``claude`` CLI."""
 
+    # `disallowed_tools` arrives from resolve_tool_restrictions.
+    EXTRA_SESSION_OPTIONS = frozenset({"disallowed_tools"})
+
     @property
     def name(self) -> str:
         return "claude_code"
@@ -758,9 +766,15 @@ class ClaudeCodeProvider(Provider):
             if mcp_config_path and os.path.exists(mcp_config_path):
                 os.unlink(mcp_config_path)
 
-        return drive_interactive_pty(cmd, capture_bytes=capture_bytes, on_exit=_cleanup)
+        return drive_interactive_pty(
+            cmd,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
+            capture_bytes=capture_bytes,
+            on_exit=_cleanup,
+        )
 
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> ClaudeCodeSession:
+        self.warn_unknown_options(kwargs)
         model = kwargs.get("model")
         system_prompt = kwargs.get("system_prompt")
         session_id = kwargs.get("session_id")
@@ -773,6 +787,7 @@ class ClaudeCodeProvider(Provider):
             session_id=session_id,
             disallowed_tools=disallowed_tools,
             reasoning=reasoning,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
         )
 
     def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
@@ -790,6 +805,7 @@ class ClaudeCodeProvider(Provider):
     ) -> ClaudeCodeSession:
         # For claude the resume key *is* the session id (passed to the CLI as
         # --resume once _has_sent is set).
+        self.warn_unknown_options(kwargs)
         session = ClaudeCodeSession(
             mcp_servers=mcp_servers,
             model=kwargs.get("model") or (trajectory.model if trajectory else None),
@@ -797,6 +813,7 @@ class ClaudeCodeProvider(Provider):
             session_id=resume_key,
             disallowed_tools=kwargs.get("disallowed_tools"),
             reasoning=(trajectory.reasoning if trajectory else None) or None,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
         )
         session._has_sent = True
         if trajectory is not None:

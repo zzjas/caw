@@ -22,6 +22,56 @@ Using the session as a context manager is the easy path — `__exit__` calls
 [`session.end()`][caw.Session.end], which finalizes the trajectory, persists it, and stops any
 tool servers. If you don't use `with`, call `session.end()` yourself.
 
+## Where the agent runs — `cwd`
+
+Every agent CLI takes its project root from the working directory: it is where
+`claude` looks for `CLAUDE.md`, where relative paths resolve, and — for codex —
+which tree `--sandbox workspace-write` may write to. Pass `cwd` to put a
+session somewhere other than your own process's directory:
+
+```python
+agent = Agent(provider="codex", sandbox="workspace-write", cwd="/tmp/job-42")
+agent.completion("Write a summary of this repo into notes.md")
+```
+
+It works the same on every provider, and on both the headless and interactive
+paths. A `cwd` that is not a directory raises `NotADirectoryError` up front —
+deliberately, because `subprocess` reports a missing working directory as
+`FileNotFoundError`, which each provider would otherwise translate into "the
+CLI is not installed".
+
+## Options a provider does not support
+
+Providers read the options they understand by name; anything else is reported:
+
+```python
+Agent(provider="claude_code", extra_config={"a": 1}).completion("hi")
+# WARNING  claude_code: ignoring unsupported session option(s): extra_config —
+#          this backend does not implement them, so they will have no effect.
+```
+
+An option a backend does not implement used to be dropped in silence, so a
+typo — or a codex-only option handed to `claude` — left the call working and
+quietly not doing what it said.
+
+### `extra_config` (codex only)
+
+codex takes arbitrary config overrides on the command line. Pass a flat dict of
+dotted keys and caw turns each into a `-c key=value` flag with a TOML-encoded
+value:
+
+```python
+agent = Agent(
+    provider="codex",
+    sandbox="workspace-write",
+    cwd=work_dir,
+    extra_config={
+        "sandbox_workspace_write.exclude_slash_tmp": True,
+        "sandbox_workspace_write.exclude_tmpdir_env_var": True,
+    },
+)
+```
+
 ## One-shot vs. session
 
 For a single message, `agent.completion(message)` is a convenience wrapper that opens a

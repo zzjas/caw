@@ -134,6 +134,21 @@ atexit.register(_cleanup_processes)
 # -- MCP config helpers -------------------------------------------------------
 
 
+def _build_extra_config_args(extra: dict[str, Any]) -> list[str]:
+    """Turn ``{"a.b": True}`` into ``-c a.b=true`` flags for the codex CLI.
+
+    codex reads config overrides as TOML values, and ``json.dumps`` already
+    emits valid TOML for every scalar and list JSON can express: ``true``, a
+    quoted string, a bare number, a bracketed array. Nested tables are
+    addressed with dotted keys, the way codex's own ``-c`` expects them, so
+    there is nothing here that needs a TOML writer.
+    """
+    args: list[str] = []
+    for key, value in extra.items():
+        args += ["-c", f"{key}={json.dumps(value)}"]
+    return args
+
+
 def _build_mcp_config_args(mcp_servers: list[MCPServer]) -> list[str]:
     """Build ``-c`` config-override flags wiring up MCP servers for ``codex``.
 
@@ -161,6 +176,8 @@ class CodexSession(ProviderSession):
         session_id: str | None = None,
         reasoning: str | None = None,
         sandbox: str | None = None,
+        cwd: str | None = None,
+        extra_config: dict[str, Any] | None = None,
     ) -> None:
         self._session_id = session_id or str(uuid.uuid4())
         self._model = model
@@ -168,6 +185,10 @@ class CodexSession(ProviderSession):
         self._system_prompt = system_prompt
         self._reasoning = reasoning
         self._sandbox = sandbox
+        # codex takes its workspace root from the working directory, so this is
+        # what confines `--sandbox workspace-write` to a particular tree.
+        self._cwd = cwd
+        self._extra_config = dict(extra_config or {})
         self._created_at = datetime.now(timezone.utc).isoformat()
         self._has_sent = False
         self._thread_id: str | None = None
@@ -191,6 +212,10 @@ class CodexSession(ProviderSession):
     def _mcp_config_args(self) -> list[str]:
         """Build ``-c`` config override flags for MCP servers."""
         return _build_mcp_config_args(self._mcp_servers)
+
+    def _extra_config_args(self) -> list[str]:
+        """Build ``-c`` flags for the caller's own config overrides."""
+        return _build_extra_config_args(self._extra_config)
 
     # ------------------------------------------------------------------
     # Core send (streaming Popen)
@@ -254,6 +279,7 @@ class CodexSession(ProviderSession):
             cmd += ["-c", f'model_reasoning_effort="{self._reasoning}"']
 
         cmd += self._mcp_config_args()
+        cmd += self._extra_config_args()
 
         # Prompt as positional arg (last)
         cmd.append(prompt)
@@ -271,6 +297,7 @@ class CodexSession(ProviderSession):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                cwd=self._cwd,
             )
         except FileNotFoundError:
             raise RuntimeError("codex CLI not found. Install it with: npm install -g @openai/codex")
@@ -549,6 +576,11 @@ class CodexSession(ProviderSession):
 class CodexProvider(Provider):
     """Provider that delegates to the ``codex`` CLI."""
 
+    # `sandbox` arrives from resolve_tool_restrictions; `extra_config` is
+    # codex's own `-c key=value` passthrough, which the others have no
+    # equivalent for.
+    EXTRA_SESSION_OPTIONS = frozenset({"sandbox", "extra_config"})
+
     @property
     def name(self) -> str:
         return "codex"
@@ -641,15 +673,21 @@ class CodexProvider(Provider):
             cmd += ["--sandbox", sandbox]
 
         cmd += _build_mcp_config_args(mcp_servers)
+        cmd += _build_extra_config_args(kwargs.get("extra_config") or {})
 
         # codex has no --system-prompt flag; prepend it like the headless path.
         system_prompt = kwargs.get("system_prompt")
         prompt = f"{system_prompt}\n\n{initial_prompt}" if system_prompt else initial_prompt
         cmd.append(prompt)
 
-        return drive_interactive_pty(cmd, capture_bytes=capture_bytes)
+        return drive_interactive_pty(
+            cmd,
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
+            capture_bytes=capture_bytes,
+        )
 
     def start_session(self, mcp_servers: list[MCPServer], **kwargs: Any) -> CodexSession:
+        self.warn_unknown_options(kwargs)
         return CodexSession(
             mcp_servers=mcp_servers,
             model=kwargs.get("model"),
@@ -657,6 +695,8 @@ class CodexProvider(Provider):
             session_id=kwargs.get("session_id"),
             reasoning=kwargs.get("reasoning"),
             sandbox=kwargs.get("sandbox"),
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
+            extra_config=kwargs.get("extra_config"),
         )
 
     def resume_key_from_trajectory(self, trajectory: Trajectory) -> str | None:
@@ -671,6 +711,7 @@ class CodexProvider(Provider):
         trajectory: Trajectory | None = None,
         **kwargs: Any,
     ) -> CodexSession:
+        self.warn_unknown_options(kwargs)
         session = CodexSession(
             mcp_servers=mcp_servers,
             model=kwargs.get("model") or (trajectory.model if trajectory else None),
@@ -678,6 +719,8 @@ class CodexProvider(Provider):
             session_id=session_id,
             reasoning=(trajectory.reasoning if trajectory else None) or None,
             sandbox=kwargs.get("sandbox"),
+            cwd=self.resolve_cwd(kwargs.get("cwd")),
+            extra_config=kwargs.get("extra_config"),
         )
         # The codex CLI resumes via `codex exec resume <thread_id>`.
         session._thread_id = resume_key

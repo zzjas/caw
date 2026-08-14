@@ -341,7 +341,7 @@ wheels = [
 
 [[package]]
 name = "coding-agent-wrapper"
-version = "0.1.9"
+version = "0.1.10"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
@@ -370,7 +370,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=1.0" },
+    { name = "mcp", specifier = ">=1.0,<2" },
     { name = "mkdocs-click", marker = "extra == 'docs'", specifier = ">=0.8" },
     { name = "mkdocs-llmstxt", marker = "extra == 'docs'", specifier = ">=0.1" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },

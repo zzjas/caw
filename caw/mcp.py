@@ -23,7 +23,45 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import uvicorn
-from mcp.server.fastmcp import Context, FastMCP
+
+# FastMCP ships inside the `mcp` package up to 1.x. mcp 2.0 removed
+# `mcp.server.fastmcp` outright (its server lives under `mcp.server.mcpserver`
+# now), so an environment that resolved `mcp` to 2.x made `import caw` fail
+# with a bare ModuleNotFoundError — for every user, including the many who
+# never touch a tool server. The dependency pin in pyproject.toml is the real
+# fix; this stops an already-broken environment from taking the whole library
+# down with it, and turns the failure into a sentence that says what to do.
+try:
+    from mcp.server.fastmcp import Context, FastMCP
+
+    _FASTMCP_IMPORT_ERROR: ImportError | None = None
+except ImportError as exc:  # pragma: no cover - depends on the installed mcp
+    _FASTMCP_IMPORT_ERROR = exc
+
+    class Context:  # type: ignore[no-redef]
+        """Stand-in so ``import caw`` works without a usable FastMCP.
+
+        Only ever used as a type annotation; everything that actually talks to
+        MCP goes through `_require_fastmcp` first.
+        """
+
+    class FastMCP:  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _require_fastmcp()
+
+
+def _require_fastmcp() -> None:
+    """Raise a useful error if FastMCP could not be imported."""
+    if _FASTMCP_IMPORT_ERROR is None:
+        return
+    raise RuntimeError(
+        "caw's tool servers need FastMCP, which ships inside the `mcp` package "
+        "up to 1.x. The installed `mcp` has no `mcp.server.fastmcp` — mcp 2.0 "
+        "removed it. Install a compatible one:\n"
+        "    pip install 'mcp>=1.0,<2'\n"
+        f"(import error: {_FASTMCP_IMPORT_ERROR})"
+    ) from _FASTMCP_IMPORT_ERROR
+
 
 __all__ = [
     "Context",
@@ -362,6 +400,7 @@ def create_mcp_http_server_bundle(
     **fastmcp_kwargs: Any,
 ) -> MCPServerHandle:
     """Create a FastMCP server plus helpers for running it over HTTP."""
+    _require_fastmcp()
     lifespan = fastmcp_kwargs.pop("lifespan", None)
     if lifespan is not None and (state_factory is not None or state_instance is not None):
         raise ValueError("Provide either lifespan or state_factory/state_instance, not both.")
