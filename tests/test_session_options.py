@@ -13,6 +13,7 @@ than as "the CLI is not installed".
 
 from __future__ import annotations
 
+import io
 import logging
 
 import pytest
@@ -31,6 +32,7 @@ class _FakeProc:
     returncode = 0
 
     def __init__(self):
+        self.stdin = io.StringIO()
         self.stdout = iter(())
         self.stderr = type("_E", (), {"read": staticmethod(lambda: "")})()
 
@@ -117,8 +119,9 @@ class TestExtraConfig:
         cmd = seen["cmd"]
         assert "-c" in cmd
         flag = cmd.index("sandbox_workspace_write.exclude_slash_tmp=true")
-        # codex only reads -c before the positional prompt, which is last.
-        assert cmd[-1] == "draw me a sticker"
+        # codex only reads -c before the positional prompt placeholder, which
+        # is last ("-": the prompt itself is piped through stdin).
+        assert cmd[-1] == "-"
         assert flag < len(cmd) - 1
 
     def test_session_keeps_its_own_copy(self):

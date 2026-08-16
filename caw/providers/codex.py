@@ -253,8 +253,11 @@ class CodexSession(ProviderSession):
         # spelling (the TUI path below already dropped it for the same reason).
         if self._sandbox is None or self._sandbox == "danger-full-access":
             sandbox_flags = ["--dangerously-bypass-approvals-and-sandbox"]
-        else:
+        elif not self._has_sent:
             sandbox_flags = ["--sandbox", self._sandbox]
+        else:
+            # `codex exec resume` has no --sandbox flag; set the policy via -c.
+            sandbox_flags = ["-c", f'sandbox_mode="{self._sandbox}"']
 
         # Build command
         if not self._has_sent:
@@ -285,8 +288,8 @@ class CodexSession(ProviderSession):
         cmd += self._mcp_config_args()
         cmd += self._extra_config_args()
 
-        # Prompt as positional arg (last)
-        cmd.append(prompt)
+        # Prompt via stdin ("-") to avoid OS argv size limits on large prompts
+        cmd.append("-")
 
         # Accumulated state for event processing
         blocks: list[ContentBlock] = []
@@ -297,7 +300,7 @@ class CodexSession(ProviderSession):
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -308,6 +311,13 @@ class CodexSession(ProviderSession):
 
         _register_process(proc)
         try:
+            try:
+                proc.stdin.write(prompt)  # type: ignore[union-attr]
+                proc.stdin.close()  # type: ignore[union-attr]
+            except BrokenPipeError:
+                # codex exited before reading stdin (e.g. bad flags); fall
+                # through so the returncode check reports its real error.
+                pass
             # Stream stdout line by line
             for line in proc.stdout:  # type: ignore[union-attr]
                 line = line.rstrip("\n")
@@ -332,8 +342,17 @@ class CodexSession(ProviderSession):
 
             self._last_raw_output = "\n".join(raw_lines)
 
-            if proc.returncode != 0 and not raw_lines:
-                raise RuntimeError(f"codex CLI exited with code {proc.returncode}: {stderr}")
+            # A nonzero exit with no text output means the turn failed outright.
+            # codex often prints the fatal error as a plain-text (non-JSON)
+            # stdout line — e.g. "Error: turn/start failed: Input exceeds the
+            # maximum length..." — after valid JSONL events, so raw_lines being
+            # non-empty is no proof of success. Usage-limit errors are exempt:
+            # _process_event surfaces those as TextBlocks so the auto-wait
+            # loop in Session.send() can retry.
+            if proc.returncode != 0 and not any(isinstance(b, TextBlock) for b in blocks):
+                plain_lines = [line.strip() for line in raw_lines if line.strip() and not line.lstrip().startswith("{")]
+                detail = "; ".join(filter(None, [stderr.strip(), *plain_lines]))
+                raise RuntimeError(f"codex CLI exited with code {proc.returncode}: {detail}")
 
         except (KeyboardInterrupt, Exception):
             proc.kill()
