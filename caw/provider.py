@@ -96,9 +96,7 @@ class Provider(ABC):
 
     #: Options every provider accepts. ``session_id`` and the tool-restriction
     #: keys are injected by the Agent layer rather than passed by users.
-    SESSION_OPTIONS: ClassVar[frozenset[str]] = frozenset(
-        {"model", "system_prompt", "session_id", "reasoning", "cwd"}
-    )
+    SESSION_OPTIONS: ClassVar[frozenset[str]] = frozenset({"model", "system_prompt", "session_id", "reasoning", "cwd"})
 
     #: Options this provider understands on top of `SESSION_OPTIONS`. Anything
     #: an Agent is given that appears in neither set is reported by

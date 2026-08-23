@@ -49,9 +49,7 @@ class TestCwd:
 
     @pytest.mark.parametrize("provider", PROVIDERS, ids=lambda p: p.name)
     def test_cwd_survives_resume(self, provider, tmp_path):
-        session = provider.resume_session(
-            mcp_servers=[], session_id="s", resume_key="r", cwd=str(tmp_path)
-        )
+        session = provider.resume_session(mcp_servers=[], session_id="s", resume_key="r", cwd=str(tmp_path))
         assert session._cwd == str(tmp_path)
 
     @pytest.mark.parametrize("provider", PROVIDERS, ids=lambda p: p.name)
@@ -90,10 +88,14 @@ class TestExtraConfig:
             }
         )
         assert args == [
-            "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-            "-c", 'model_reasoning_effort="high"',
-            "-c", "some.number=3",
-            "-c", 'some.list=["a", "b"]',
+            "-c",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+            "-c",
+            'model_reasoning_effort="high"',
+            "-c",
+            "some.number=3",
+            "-c",
+            'some.list=["a", "b"]',
         ]
 
     def test_empty_config_adds_nothing(self):
@@ -154,8 +156,7 @@ class TestUnknownOptions:
         cases = [
             (CodexProvider(), {"sandbox": "read-only", "extra_config": {"a": 1}}),
             (ClaudeCodeProvider(), {"disallowed_tools": ["Bash"]}),
-            (ClaudePProvider(), {"disallowed_tools": ["Bash"], "timeout_sec": 30.0,
-                                 "strip_provider_env": False}),
+            (ClaudePProvider(), {"disallowed_tools": ["Bash"], "timeout_sec": 30.0, "strip_provider_env": False}),
             (OpencodeProvider(), {"disabled_tools": ["bash"]}),
         ]
         for provider, kwargs in cases:

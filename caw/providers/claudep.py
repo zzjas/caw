@@ -325,9 +325,7 @@ class ClaudePSession(ClaudeCodeSession):
         master, slave = pty.openpty()
         start = time.time()
         try:
-            proc = subprocess.Popen(
-                cmd, stdin=slave, stdout=slave, stderr=slave, env=env, cwd=self._cwd or os.getcwd()
-            )
+            proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, env=env, cwd=self._cwd or os.getcwd())
         except FileNotFoundError:
             os.close(master)
             os.close(slave)
