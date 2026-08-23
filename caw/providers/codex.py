@@ -41,7 +41,7 @@ from caw.provider import Provider, ProviderSession
 
 # Reuse the process-group teardown shared with the claude_code provider so a
 # leftover descendant can't hold our stdout pipe open and wedge the read.
-from caw.providers.claude_code import _terminate_process_group
+from caw.providers.claude_code import _StderrDrain, _terminate_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +312,9 @@ class CodexSession(ProviderSession):
             raise RuntimeError("codex CLI not found. Install it with: npm install -g @openai/codex")
 
         _register_process(proc)
+        # Concurrent, so a chatty child can never fill the stderr pipe and block
+        # in write() while we sit reading a stdout it cannot reach.
+        stderr_drain = _StderrDrain(proc)
         try:
             # Stream stdout line by line
             saw_result = False
@@ -356,8 +359,8 @@ class CodexSession(ProviderSession):
             else:
                 # No terminal event: natural EOF or an early exit. The process
                 # ended on its own, so its status is real.
-                stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
                 proc.wait()
+                stderr = stderr_drain.text()
                 if proc.returncode != 0 and not raw_lines:
                     raise RuntimeError(f"codex CLI exited with code {proc.returncode}: {stderr}")
 

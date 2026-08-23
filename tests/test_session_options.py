@@ -32,7 +32,9 @@ class _FakeProc:
 
     def __init__(self):
         self.stdout = iter(())
-        self.stderr = type("_E", (), {"read": staticmethod(lambda: "")})()
+        # ``read`` takes a size, like the real thing: the stderr drain reads in
+        # chunks, and a no-arg double would only ever fail inside its thread.
+        self.stderr = type("_E", (), {"read": staticmethod(lambda size=-1: "")})()
 
     def wait(self):
         return 0

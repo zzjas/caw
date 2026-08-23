@@ -221,6 +221,91 @@ def _cleanup_processes() -> None:
 
 atexit.register(_cleanup_processes)
 
+
+# -- stderr drain -------------------------------------------------------------
+
+#: Characters of a child's stderr kept for the early-exit error message. The
+#: drain reads *everything* -- that is the whole point; this caps only what we
+#: hold on to, tail-first, because a crash message is at the end.
+_STDERR_KEEP = 64 * 1024
+
+
+class _StderrDrain:
+    """Read a child's stderr on a thread for the life of one turn.
+
+    Every provider here wants stderr for exactly one thing: the text in the
+    ``RuntimeError`` raised when the CLI exits early. The obvious way to get it
+    is to read stderr once the stdout loop has ended -- and that deadlocks. A
+    pipe holds ~64 KiB, so a child that writes more than that before we are
+    done with stdout blocks in ``write()``, while we block reading a stdout it
+    can no longer produce. Neither side moves again, at zero CPU, with nothing
+    above us that times out.
+
+    Not hypothetical: a codex CLI too old for the model it was handed failed to
+    parse the server's model catalog and logged the whole ~140 KB response body
+    as one stderr line before its first API call. The turn hung for 52 minutes
+    until the pipe was drained from outside, whereupon the real answer -- an
+    HTTP 400 naming the CLI version -- arrived in seconds.
+
+    Draining concurrently is the fix: the buffer never fills, so the child is
+    never blocked on us, and what it wrote is still there to quote.
+    """
+
+    def __init__(self, proc: subprocess.Popen) -> None:
+        self._stream = proc.stderr
+        self._lock = threading.Lock()
+        self._chunks: list[str] = []
+        self._kept = 0
+        self._dropped = 0
+        self._thread: threading.Thread | None = None
+        if self._stream is None:
+            return
+        # Nothing but ``stderr`` is required of *proc* -- the pid only names the
+        # thread, so a test double without one still gets a drain.
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"caw-stderr-drain-{getattr(proc, 'pid', '?')}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            while True:
+                chunk = self._stream.read(8192)  # type: ignore[union-attr]
+                if not chunk:
+                    return
+                with self._lock:
+                    self._chunks.append(chunk)
+                    self._kept += len(chunk)
+                    # Drop whole chunks off the front while the rest still
+                    # covers the cap, so the tail is never truncated.
+                    while len(self._chunks) > 1 and self._kept - len(self._chunks[0]) >= _STDERR_KEEP:
+                        gone = self._chunks.pop(0)
+                        self._kept -= len(gone)
+                        self._dropped += len(gone)
+        except (OSError, ValueError):
+            # Pipe closed under us by teardown -- keep whatever we have.
+            return
+
+    def text(self, timeout: float = 1.0) -> str:
+        """What the child wrote to stderr, tail-capped. Never blocks for long.
+
+        The join is bounded because a descendant that inherited the pipe can
+        hold it open past the CLI's own exit -- the hazard
+        ``_terminate_process_group`` exists for. A slightly short error message
+        beats hanging on one.
+        """
+        if self._thread is not None:
+            self._thread.join(timeout)
+        with self._lock:
+            body = "".join(self._chunks)
+            dropped = self._dropped
+        if dropped:
+            return f"[... {dropped} earlier character(s) of stderr dropped ...]\n{body}"
+        return body
+
+
 # -- Usage-limit detection ----------------------------------------------------
 
 _LIMIT_RESET_RE = re.compile(
@@ -491,6 +576,9 @@ class ClaudeCodeSession(ProviderSession):
             raise RuntimeError("claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code")
 
         _register_process(proc)
+        # Concurrent, so a chatty child can never fill the stderr pipe and block
+        # in write() while we sit reading a stdout it cannot reach.
+        stderr_drain = _StderrDrain(proc)
         try:
             # Write message to stdin, then close to signal EOF
             proc.stdin.write(message)  # type: ignore[union-attr]
@@ -541,8 +629,8 @@ class ClaudeCodeSession(ProviderSession):
             else:
                 # No terminal result event: natural EOF or an early exit. The
                 # process ended on its own, so its status is real.
-                stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
                 proc.wait()
+                stderr = stderr_drain.text()
                 if proc.returncode != 0 and not raw_lines:
                     raise RuntimeError(f"claude CLI exited with code {proc.returncode}: {stderr}")
 

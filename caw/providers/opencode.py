@@ -44,7 +44,7 @@ from caw.provider import Provider, ProviderSession
 
 # Reuse the process-group teardown shared with the claude_code provider so a
 # leftover descendant can't hold our pipes open and wedge the read.
-from caw.providers.claude_code import _terminate_process_group
+from caw.providers.claude_code import _StderrDrain, _terminate_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +372,9 @@ class OpencodeSession(ProviderSession):
         # group id is its pid -- captured now because it stays usable after a
         # wait() has reaped the leader.
         pgid = proc.pid
+        # Concurrent, so a chatty child can never fill the stderr pipe and block
+        # in write() while we sit reading a stdout it cannot reach.
+        stderr_drain = _StderrDrain(proc)
         done = threading.Event()
         threading.Thread(
             target=_reap_group_after_exit,
@@ -398,8 +401,8 @@ class OpencodeSession(ProviderSession):
                 if self._step_callback and blocks:
                     self._step_callback(list(blocks))
 
-            stderr = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
             proc.wait()
+            stderr = stderr_drain.text()
 
             self._last_raw_output = "\n".join(raw_lines)
 
@@ -410,8 +413,9 @@ class OpencodeSession(ProviderSession):
             _terminate_process_group(proc, pgid)
             raise
         finally:
-            # Set only once every read is done, so the watchdog also covers a
-            # stderr read held open by the same descendant.
+            # Set only once the stdout read is done, so the watchdog covers a
+            # read held open by a descendant. stderr needs no such cover: the
+            # drain runs on its own thread and is never waited on unbounded.
             done.set()
             _unregister_process(proc)
 
