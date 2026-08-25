@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -133,6 +134,21 @@ def _cleanup_processes() -> None:
 
 
 atexit.register(_cleanup_processes)
+
+
+# -- Prompt argv / stdin ------------------------------------------------------
+
+# Linux ARG_MAX includes the process environment, so keep a conservative
+# threshold well below SC_ARG_MAX. Large prompts (e.g. CodeWiki repository
+# overviews) must use ``codex exec … -`` and stdin.
+_PROMPT_STDIN_THRESHOLD_BYTES = 100_000
+
+
+def _prompt_exceeds_argv_budget(cmd: list[str], prompt: str, *, threshold: int = _PROMPT_STDIN_THRESHOLD_BYTES) -> bool:
+    """Return True when placing ``prompt`` on argv would risk E2BIG."""
+    cmd_bytes = sum(len(part.encode("utf-8", "replace")) + 1 for part in cmd)
+    prompt_bytes = len(prompt.encode("utf-8", "replace"))
+    return (cmd_bytes + prompt_bytes) > threshold
 
 
 # -- MCP config helpers -------------------------------------------------------
@@ -289,8 +305,13 @@ class CodexSession(ProviderSession):
         cmd += self._mcp_config_args()
         cmd += self._extra_config_args()
 
-        # Prompt as positional arg (last)
-        cmd.append(prompt)
+        # Prompt as positional arg, or stdin ("-") when argv would exceed ARG_MAX.
+        if _prompt_exceeds_argv_budget(cmd, prompt):
+            cmd.append("-")
+            stdin_data = prompt
+        else:
+            cmd.append(prompt)
+            stdin_data = None
 
         # Accumulated state for event processing
         blocks: list[ContentBlock] = []
@@ -301,7 +322,7 @@ class CodexSession(ProviderSession):
         try:
             proc = subprocess.Popen(
                 cmd,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -316,6 +337,9 @@ class CodexSession(ProviderSession):
         # in write() while we sit reading a stdout it cannot reach.
         stderr_drain = _StderrDrain(proc)
         try:
+            if stdin_data is not None and proc.stdin is not None:
+                proc.stdin.write(stdin_data)
+                proc.stdin.close()
             # Stream stdout line by line
             saw_result = False
             for line in proc.stdout:  # type: ignore[union-attr]
